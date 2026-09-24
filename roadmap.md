@@ -3,7 +3,7 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 0 — Cadrage & fondations
+**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda
 **Dernière mise à jour :** 2026-09-24
 
 ---
@@ -74,7 +74,6 @@ docker/
 └── api/Dockerfile
 docker-compose.yaml            # Prod (réseau coolify) — services applicatifs seulement, l'infra est partagée (D9)
 docker-compose.dev.yaml        # Local : Redpanda + Garage + Postgres
-infra/redpanda/                # Service Coolify partagé (D9), déployé à part
 tests/                         # Un fichier de test par module
 ```
 
@@ -135,8 +134,8 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D5 | Dashboard | Portfolio React (via `serving/api.py`) · Streamlit · Evidence | Portfolio React existant, alimenté par l'API | reporté (phase 8) |
 | D6 | dbt-spark : méthode de connexion | `session` · Thrift server | `session` : pas de service en plus | **tranché le 2026-09-24** |
 | D7 | Moteur de la branche B | Bytewax · Quix Streams · Pathway · Arroyo | Quix Streams : Apache-2.0, releases actives, natif Kafka/Redpanda, 100 % Python sans JVM (Bytewax est maintenu par la communauté seulement depuis mai 2025, dernière release en nov. 2024) | **tranché le 2026-09-24 : Quix Streams** |
-| D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (`infra/garage/`), MinIO supprimé le 2026-09-24 |
-| D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, compose dans `infra/redpanda/` |
+| D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (ressource Coolify, compose hors de ce repo), MinIO supprimé le 2026-09-24 |
+| D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -157,20 +156,23 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Makefile : `up`, `down`, `reset`, `logs`, `ps` et `check_uv` en prérequis
 - [x] `.env.example` complet, supprimer `src/main.py` et le test du template
 - [x] Stack locale : Garage à la place de MinIO (bucket et clé créés automatiquement), `AWS_DEFAULT_REGION` dans `.env.example`, ports limités à `127.0.0.1`
-- [ ] Vérifier que la CI passe sur GitHub (PR `feat/phase-0-skeleton` → `dev`)
+- [x] CI verte sur GitHub (PR #1, mergée par erreur dans `main`, puis `dev` réaligné)
 
 **Fini quand :** `make up` démarre la stack locale, et `make lint` et `make test` passent en CI.
 
 ### Phase 1 — Ingestion : Jetstream → Redpanda
 **Objectif :** un flux continu, fiable et qui reprend là où il s'est arrêté.
 
-- [ ] `producer.py` : client WebSocket Jetstream, filtre `wantedCollections`
-- [ ] Reconnexion avec backoff exponentiel, reprise depuis le curseur `time_us` persisté
-- [ ] Clé de message `did`, compression, `acks=all`
-- [ ] Topic `raw_events` : partitions et `retention.ms` = 24 h (tampon de sécurité pour les redémarrages et la bascule, pas de rejeu)
-- [ ] Logs de débit (événements/s) avec loguru
-- [ ] Tests : parsing d'un message Jetstream, reconnexion, reprise du curseur
-- [ ] Mesurer le volume réel (événements/jour, Go/jour) et le noter dans le journal
+- [x] `producer.py` : client WebSocket **Jetstream v2** (`/xrpc/network.bsky.jetstream.subscribeEvents`), filtres `collections` + `kinds=commit`
+- [x] Reconnexion avec backoff exponentiel + jitter ; reprise au dernier `seq` lu **dans le topic** (pas d'état local), replay plafonné à 60 min
+- [ ] Tester en réel une coupure WebSocket (reconnexion en cours de session, pas seulement au redémarrage)
+- [x] Clé de message `did`, zstd, `acks=all`, idempotence, horodatage = heure de l'événement
+- [x] Topic `raw_events` créé par le producer : 3 partitions, `retention.ms` = 24 h, `CreateTime`
+- [x] Logs toutes les 30 s : msg/s, KiB/s, lag, dernier `seq` acquitté, erreurs de livraison
+- [x] Tests unitaires : URL, parsing, choix du curseur (dont plafond de rejeu), backoff
+- [x] `docker/producer/Dockerfile` (Python 3.12.14-slim, uv 0.12.18, groupe `producer`, non-root, arrêt propre sur SIGTERM) + `make produce`
+- [x] Volume mesuré (voir journal)
+- [ ] Déployer le producer sur le VPS (service Coolify, `KAFKA_BOOTSTRAP_SERVERS=redpanda:9092`) pour le run de 24 h
 
 **Fini quand :** 24 h d'ingestion sans trou, et un redémarrage du producer ne perd pas d'événements.
 **Piège :** au premier démarrage, le rejeu Jetstream peut inonder Redpanda ; limiter la fenêtre du curseur.
@@ -270,7 +272,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] Données prêtes pour une page projet du portfolio (PipelineViz)
 
 ### Phase 9 — Déploiement VPS (Coolify)
-- [x] Déployer Redpanda comme service Coolify séparé (D9) à partir de `infra/redpanda/docker-compose.yaml` (vérifié en prod le 2026-09-24)
+- [x] Déployer Redpanda comme service Coolify séparé (D9) (vérifié en prod le 2026-09-24)
 - [x] Migration MinIO → Garage (D8) en prod : POC, `rclone sync` + `check` (0 différence), bascule de velib et Dagster
 - [x] MinIO supprimé et 9000/9001 retirés du pare-feu (2026-09-24)
 - [ ] Job `deploy` en CI via Tailscale (OIDC, `tag:ci`), sur le modèle de velib : voir la note Obsidian « VPS - Déploiement CI via Tailscale »
@@ -309,3 +311,13 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Incident hors migration** : `opendata.paris.fr` en NXDOMAIN depuis le 2026-09-23, donc velib en échec depuis le 23/09 à 11:20. Correctif `baa9aa6` dans velib (hôte `parisdata.opendatasoft.com`).
 - **CI → Coolify via Tailscale** : les routes publiques de Coolify ont été retirées. Les runners GitHub rejoignent le tailnet en `tag:ci` (OIDC, sans secret longue durée), avec accès limité à `100.125.33.49:8000`. Validé sur velib (`23d04d3`). Schéma à réutiliser en phase 9.
 - **Suite :** commit de la phase 0 (+ Garage dans la stack locale), PR vers `dev`, puis phase 1
+- **Phase 0 close** : CI verte, `dev` réaligné sur `main`. Template cookiecutter corrigé (lint de `main.py`).
+
+### 2026-09-24 — Phase 1 (ingestion)
+- **Jetstream réécrit (v2)** : nouveau endpoint `/xrpc/network.bsky.jetstream.subscribeEvents`, paramètres `collections` et `kinds`, enveloppe `{"$type": "message", "payload": {...}}`, curseur = `seq` **inclusif**, livraison at-least-once. Les événements `identity`/`account` ignorent le filtre de collections, d'où `kinds=commit`.
+- **Volume mesuré** (4 collections) : ~410-460 msg/s, ~600 B/msg JSON, soit ~37 M msg/jour et ~23 Go/jour bruts. Mix : 60 % likes, 11 % posts, 10 % reposts, 8 % follows, 9 % suppressions de posts. En Redpanda (zstd) : **184 B/msg (×3,3)**, soit **~6,8 Go pour 24 h** de rétention.
+- **Reprise prouvée** sur 225 969 messages : un seul `seq` dupliqué, exactement la borne de reprise, donc aucun trou. Dédoublonnage aval sur `seq`.
+- **Partitions déséquilibrées** (×2,5 sur une partition) : quelques DID très actifs (probablement des bots). À surveiller pour Spark et Quix.
+- **Piège** : `localhost` → librdkafka tente IPv6 (`::1`) en premier. En local, Redpanda annonce `127.0.0.1:19092`.
+- **Suite** : test de coupure WebSocket en cours de session, puis déploiement du producer sur le VPS pour le run de 24 h
+- **`infra/` retiré du repo** (choix de Julien) : les composes Redpanda et Garage partagés vivent dans Coolify. Dernière version versionnée : commit `e4964a6`.
