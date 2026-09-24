@@ -6,6 +6,13 @@
 **Phase en cours :** 1 — Ingestion : Jetstream → Redpanda
 **Dernière mise à jour :** 2026-09-24
 
+> **Prochaine session : commencer ici**
+> 1. **Contrôle du run producer** (démarré le 2026-09-24 à 16:21 UTC en prod, ressource Coolify `nji5qadaz1pobiikeumiv4a5`), à faire **après le 2026-09-25 16:22 UTC** : 0 redémarrage, aucun trou de `seq` hors bornes de reprise, taille du topic (plateau attendu ~6,7 Go), disque du VPS. Si OK : phase 1 close.
+> 2. **Secrets CI du repo** pour le déploiement auto : `TS_OAUTH_CLIENT_ID` et `TS_AUDIENCE` (credential Tailscale pour `repo:Julcrm/bluesky-streamhouse:ref:refs/heads/main`, ou le joker `repo:Julcrm/*:ref:refs/heads/main`), `COOLIFY_WEBHOOK_SECRET` (jeton Coolify de velib), `COOLIFY_WEBHOOK_URL` = `http://100.125.33.49:8000/api/v1/deploy?uuid=nji5qadaz1pobiikeumiv4a5&force=false`.
+> 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
+> 4. **Petits correctifs producer** : forcer IPv4 côté librdkafka (`broker.address.family=v4`), parce que `redpanda` se résout aussi en IPv6 sur le réseau `coolify` (1 erreur bruyante au démarrage).
+> 5. **Avant la phase 2** : trancher le déséquilibre des partitions (clé `did` : 32 k / 99 k / 130 k messages sur les 3 partitions en prod). Options : clé = `seq` ou aléatoire (l'ordre par compte n'est pas nécessaire en Bronze), ou plus de partitions.
+
 ---
 
 ## Architecture cible
@@ -334,3 +341,9 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Branches Spark/Quix de 07:00 à 19:00** (heure de Paris). La journée de benchmark devient **19:00 → 19:00**, sinon les données de 19:00 à minuit ne seraient traitées par aucune branche.
 - Effet de bord utile : le rattrapage de ~12 h chaque matin sert de **test de débit max quotidien**. Il faudra séparer métriques de rattrapage et de temps réel.
 - Rétention à monter à 36 h en phase 6 pour garder de la marge.
+
+### 2026-09-24 — Producer en prod
+- Déployé sur le VPS (Coolify, réseau `coolify`, `redpanda:9092`) le 2026-09-24 à 16:21 UTC. ~405 msg/s, lag 0,1 s, 40 Mio de RAM, ~8 % de CPU, 0 erreur de livraison. CI `main` verte, déploiement auto en attente des secrets.
+- Taille réelle en prod : **~192 B/msg**, soit ~280 Mo/h et un plateau attendu à ~6,7 Go avec 24 h de rétention (~10 Go à 36 h). 214 Go libres sur le VPS.
+- `__consumer_offsets` créé automatiquement (consumer de reprise du producer) : topic système, ne pas toucher.
+- `dev`/`main` : 2 commits de la phase 1 poussés après le merge de la PR #2, rattrapés par des merges git (`f4e0773`, `dffc58c`). Règle : pousser tout **avant** de merger.
