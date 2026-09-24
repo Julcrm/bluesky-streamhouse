@@ -136,6 +136,7 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D7 | Moteur de la branche B | Bytewax · Quix Streams · Pathway · Arroyo | Quix Streams : Apache-2.0, releases actives, natif Kafka/Redpanda, 100 % Python sans JVM (Bytewax est maintenu par la communauté seulement depuis mai 2025, dernière release en nov. 2024) | **tranché le 2026-09-24 : Quix Streams** |
 | D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (ressource Coolify, compose hors de ce repo), MinIO supprimé le 2026-09-24 |
 | D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
+| D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -226,14 +227,17 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 ### Phase 6 — Alternance jour 1 / jour 2
 **Objectif :** faire tourner une seule branche par jour, à tour de rôle (D1).
 
-- [ ] Schedule Dagster de bascule quotidienne à 00:00 UTC : arrêt de la branche sortante, démarrage de la branche entrante
-- [ ] Chaque branche démarre à l'offset de 00:00 (`offsets_for_times`) sur son propre consumer group : aucun trou ni doublon à la bascule
+- [ ] Schedules Dagster (D10, heure de Paris) : **07:00** démarrage de la branche du jour, **19:00** arrêt. Le producer, lui, tourne 24 h/24.
+- [ ] Chaque branche démarre à l'offset de **19:00 la veille** (`offsets_for_times`) sur son propre consumer group et s'arrête à l'offset de **19:00 le jour même** : aucun trou ni doublon entre deux journées
+- [ ] Rattrapage de 07:00 : ~12 h de données (~18,6 M messages à ~430 msg/s). Vérifier qu'il se termine bien avant 19:00 pour les deux branches.
+- [ ] Rétention `raw_events` passée à 36 h (D10)
 - [ ] Table `branch_calendar` (date, branche active, offsets de début et de fin) comme référence du benchmark
-- [ ] Contrôle de complétude : nombre d'événements dans Bronze égal au nombre d'offsets consommés dans Redpanda pour la journée (asset check Dagster)
+- [ ] Contrôle de complétude : nombre d'événements dans Bronze égal au nombre d'offsets consommés dans Redpanda pour la journée 19:00 → 19:00 (asset check Dagster)
 - [ ] Sensors d'échec sur tous les jobs
 
 **Fini quand :** 14 jours d'alternance automatique sans intervention. Avec un cycle de 2 jours sur une semaine de 7, chaque branche passe par les 7 jours de la semaine en 14 jours.
 **Piège :** la journée de bascule mélange deux branches si l'arrêt n'est pas propre. Il faut attendre le dernier commit de la branche sortante avant de figer l'offset de fin.
+**Piège :** 19:00 Europe/Paris change d'heure UTC deux fois par an (heure d'été/hiver) : calculer les bornes dans le fuseau de Paris, puis convertir en UTC.
 
 ### Phase 7 — Observabilité & benchmark
 **Objectif :** des chiffres comparables et défendables.
@@ -253,7 +257,8 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] Table `benchmark_windows` (branche, début de fenêtre, messages, cpu_ms, ram_mb_s, bytes_written, lag, latence p50/p95, mix de collections)
 - [ ] **Buckets de débit** : ranger chaque fenêtre par niveau de trafic (ex. 0–200, 200–500, 500+ msg/s) et comparer A et B bucket par bucket. C'est ce qui rend « à volume équivalent » rigoureux.
 - [ ] **Coût fixe à part** : RAM et CPU du conteneur au repos (JVM, runtime Quix) mesurés séparément et affichés comme une ligne de base
-- [ ] **Test de rattrapage** hebdomadaire : consumer en pause 30 min, puis vitesse de résorption du lag. C'est la seule mesure honnête du débit max ; en temps normal, les deux branches suivent simplement le rythme du flux.
+- [ ] **Test de rattrapage quotidien (D10)** : chaque matin à 07:00, la branche du jour rattrape ~12 h de nuit. Débit de résorption du lag = débit max soutenu (msg/s/vCPU), mesuré chaque jour sans test artificiel.
+- [ ] **Séparer les deux régimes** dans `benchmark_windows` : `catchup` (07:00 → fin du lag) et `live` (temps réel jusqu'à 19:00). Latence et ratios d'efficience du régime live à ne pas mélanger avec le rattrapage.
 - [ ] Limites CPU/RAM Docker identiques pour les deux branches
 - [ ] Comparer aussi à jour de semaine équivalent (lundi A contre lundi B)
 - [ ] Optionnel : les deux branches rejouent le même échantillon d'1 h, pour valider la normalisation et vérifier la parité des tables Gold
@@ -323,3 +328,9 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Prod prête** : `docker-compose.yaml` (producer seul, réseau `coolify`, limite 256 Mo), job `deploy` via Tailscale/OIDC, ignoré tant que les secrets ne sont pas configurés. Mesure : ~37 Mio de RAM, ~11 % d'un CPU en régime normal, ~50 % en rattrapage (~4 900 msg/s). File librdkafka plafonnée à 64 Mo.
 - **Suite** : merge `dev` → `main`, création de la ressource Coolify, secrets CI, puis run de 24 h
 - **`infra/` retiré du repo** (choix de Julien) : les composes Redpanda et Garage partagés vivent dans Coolify. Dernière version versionnée : commit `e4964a6`.
+
+### 2026-09-24 — Fenêtre de fonctionnement (D10)
+- Producer **24 h/24** : quasiment gratuit (~40 Mo, ~8 % CPU), et c'est le seul point de collecte. Une plage horaire sur le producer a été envisagée puis abandonnée.
+- **Branches Spark/Quix de 07:00 à 19:00** (heure de Paris). La journée de benchmark devient **19:00 → 19:00**, sinon les données de 19:00 à minuit ne seraient traitées par aucune branche.
+- Effet de bord utile : le rattrapage de ~12 h chaque matin sert de **test de débit max quotidien**. Il faudra séparer métriques de rattrapage et de temps réel.
+- Rétention à monter à 36 h en phase 6 pour garder de la marge.
