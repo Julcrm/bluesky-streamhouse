@@ -320,5 +320,6 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Partitions déséquilibrées** (×2,5 sur une partition) : quelques DID très actifs (probablement des bots). À surveiller pour Spark et Quix.
 - **Piège** : `localhost` → librdkafka tente IPv6 (`::1`) en premier. En local, Redpanda annonce `127.0.0.1:19092`.
 - **Test de coupure** : 1er essai, détection en 35 s (ping par défaut 20+20 s) et 3 doublons (accusés de réception non traités). Corrigé avec ping 10+10 s, `flush()` avant de choisir le curseur, et backoff remis à zéro après une session saine. 2e essai : détection en 15 s, 1 seul doublon, 0 perte.
-- **Suite** : déploiement du producer sur le VPS pour le run de 24 h
+- **Prod prête** : `docker-compose.yaml` (producer seul, réseau `coolify`, limite 256 Mo), job `deploy` via Tailscale/OIDC, ignoré tant que les secrets ne sont pas configurés. Mesure : ~37 Mio de RAM, ~11 % d'un CPU en régime normal, ~50 % en rattrapage (~4 900 msg/s). File librdkafka plafonnée à 64 Mo.
+- **Suite** : merge `dev` → `main`, création de la ressource Coolify, secrets CI, puis run de 24 h
 - **`infra/` retiré du repo** (choix de Julien) : les composes Redpanda et Garage partagés vivent dans Coolify. Dernière version versionnée : commit `e4964a6`.

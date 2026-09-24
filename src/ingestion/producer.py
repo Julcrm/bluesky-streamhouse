@@ -160,6 +160,9 @@ def build_producer(bootstrap_servers: str) -> Producer:
             "enable.idempotence": True,
             "compression.type": "zstd",
             "linger.ms": 50,
+            # Bound the local queue (default 1 GB): if Redpanda is down, produce()
+            # raises BufferError and ingestion slows down instead of exhausting memory
+            "queue.buffering.max.kbytes": 65536,
         }
     )
 

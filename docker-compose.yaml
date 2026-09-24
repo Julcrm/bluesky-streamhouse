@@ -1,0 +1,34 @@
+# =============================================================================
+# Bluesky Streamhouse — Docker Compose (production, Coolify)
+# Services:
+#   - producer: Jetstream v2 -> Redpanda `raw_events` (no exposed port)
+# Shared services, deployed as separate Coolify resources:
+#   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
+# Services of later phases (Quix, Spark, Dagster code server, API) are added here.
+# Network: coolify (external)
+# =============================================================================
+
+services:
+  # Streams Bluesky commit events into Redpanda; resumes from the last seq on restart
+  producer:
+    build:
+      context: .
+      dockerfile: docker/producer/Dockerfile
+    container_name: bsh-producer
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - JETSTREAM_MAX_REPLAY_MINUTES=${JETSTREAM_MAX_REPLAY_MINUTES:-60}
+    # Leaves time for the SIGTERM flush of in-flight messages
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M  # measured ~37 MiB steady, <110 MiB with a full send queue
+    networks:
+      - coolify
+    restart: always
+
+networks:
+  coolify:
+    external: true
+    name: coolify
