@@ -160,6 +160,9 @@ def build_producer(bootstrap_servers: str) -> Producer:
             "enable.idempotence": True,
             "compression.type": "zstd",
             "linger.ms": 50,
+            # Bound the local queue (default 1 GB): if Redpanda is down, produce()
+            # raises BufferError and ingestion slows down instead of exhausting memory
+            "queue.buffering.max.kbytes": 65536,
         }
     )
 
@@ -175,6 +178,7 @@ class JetstreamIngestor:
         self.cursor = cursor
         self.last_acked_seq: int | None = None
         self.delivery_errors = 0
+        self.session_received = False
         self.stop = asyncio.Event()
         self._reset_stats()
 
@@ -222,25 +226,40 @@ class JetstreamIngestor:
         )
         self._reset_stats()
 
-    async def _stream_once(self) -> None:
-        """One WebSocket session: stream until disconnect or stop."""
+    async def _stream_once(self) -> bool:
+        """One WebSocket session: stream until disconnect or stop.
+
+        Returns True if at least one event was received, so the caller can reset
+        its backoff after a healthy session. A silent network cut is detected by
+        the keepalive ping within ~ping_interval + ping_timeout (20s).
+        """
         cursor = self.last_acked_seq if self.last_acked_seq is not None else self.cursor
         url = build_subscribe_url(
             config.JETSTREAM_URL, config.JETSTREAM_COLLECTIONS, config.JETSTREAM_KINDS, cursor
         )
         logger.info(f"Connecting to Jetstream (cursor={cursor})")
-        async with websockets.connect(url, max_size=2**22, open_timeout=15, close_timeout=2) as ws:
+        self.session_received = False
+        async with websockets.connect(
+            url,
+            max_size=2**22,
+            open_timeout=15,
+            close_timeout=2,
+            ping_interval=10,
+            ping_timeout=10,
+        ) as ws:
             async for raw in ws:
                 event = parse_event(raw)
                 if event is None:
                     continue
+                self.session_received = True
                 self._produce(event)
                 self.stats_messages += 1
                 self.stats_bytes += len(event.value)
                 self.stats_lag_s = time.time() - event.timestamp_ms / 1000
                 self._log_stats()
                 if self.stop.is_set():
-                    return
+                    return self.session_received
+        return self.session_received
 
     async def run(self) -> None:
         """Stream forever, reconnecting with exponential backoff."""
@@ -250,6 +269,11 @@ class JetstreamIngestor:
                 await self._stream_once()
                 attempt = 0
             except (OSError, websockets.WebSocketException) as e:
+                # A session that delivered events was healthy: restart the backoff
+                if self.session_received:
+                    attempt = 0
+                # Process pending delivery reports so the resume cursor is exact
+                self.producer.flush(10)
                 delay = backoff_delay(attempt, jitter=random.uniform(0, 1))
                 logger.warning(f"Jetstream connection lost ({e!r}), retrying in {delay:.1f}s")
                 attempt += 1

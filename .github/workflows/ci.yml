@@ -34,3 +34,37 @@ jobs:
 
       - name: Check uv.lock is up to date
         run: uv lock --check
+
+  deploy:
+    name: Deploy to Coolify
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # The Coolify API is only reachable through Tailscale: the runner joins the
+    # tailnet as an ephemeral `tag:ci` node via workload identity federation (OIDC).
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Deployment is skipped (not failed) until the Coolify resource and secrets exist
+      DEPLOY_CONFIGURED: ${{ secrets.COOLIFY_WEBHOOK_URL != '' }}
+
+    steps:
+      - name: Skip notice
+        if: env.DEPLOY_CONFIGURED != 'true'
+        run: echo "::notice::Coolify deploy secrets not set, deployment skipped"
+
+      - name: Join tailnet
+        if: env.DEPLOY_CONFIGURED == 'true'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: 100.125.33.49
+
+      - name: Trigger Coolify deployment
+        if: env.DEPLOY_CONFIGURED == 'true'
+        run: |
+          curl -f --show-error --max-time 30 -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_WEBHOOK_SECRET }}"

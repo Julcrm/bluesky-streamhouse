@@ -165,7 +165,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 
 - [x] `producer.py` : client WebSocket **Jetstream v2** (`/xrpc/network.bsky.jetstream.subscribeEvents`), filtres `collections` + `kinds=commit`
 - [x] Reconnexion avec backoff exponentiel + jitter ; reprise au dernier `seq` lu **dans le topic** (pas d'état local), replay plafonné à 60 min
-- [ ] Tester en réel une coupure WebSocket (reconnexion en cours de session, pas seulement au redémarrage)
+- [x] Coupure réseau en cours de session testée (règle pare-feu sur tcp/443 pendant 40 s) : détection en 15 s par keepalive (≤ 20 s), reprise au dernier `seq` acquitté, un seul doublon à la borne, 0 perte
 - [x] Clé de message `did`, zstd, `acks=all`, idempotence, horodatage = heure de l'événement
 - [x] Topic `raw_events` créé par le producer : 3 partitions, `retention.ms` = 24 h, `CreateTime`
 - [x] Logs toutes les 30 s : msg/s, KiB/s, lag, dernier `seq` acquitté, erreurs de livraison
@@ -319,5 +319,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Reprise prouvée** sur 225 969 messages : un seul `seq` dupliqué, exactement la borne de reprise, donc aucun trou. Dédoublonnage aval sur `seq`.
 - **Partitions déséquilibrées** (×2,5 sur une partition) : quelques DID très actifs (probablement des bots). À surveiller pour Spark et Quix.
 - **Piège** : `localhost` → librdkafka tente IPv6 (`::1`) en premier. En local, Redpanda annonce `127.0.0.1:19092`.
-- **Suite** : test de coupure WebSocket en cours de session, puis déploiement du producer sur le VPS pour le run de 24 h
+- **Test de coupure** : 1er essai, détection en 35 s (ping par défaut 20+20 s) et 3 doublons (accusés de réception non traités). Corrigé avec ping 10+10 s, `flush()` avant de choisir le curseur, et backoff remis à zéro après une session saine. 2e essai : détection en 15 s, 1 seul doublon, 0 perte.
+- **Prod prête** : `docker-compose.yaml` (producer seul, réseau `coolify`, limite 256 Mo), job `deploy` via Tailscale/OIDC, ignoré tant que les secrets ne sont pas configurés. Mesure : ~37 Mio de RAM, ~11 % d'un CPU en régime normal, ~50 % en rattrapage (~4 900 msg/s). File librdkafka plafonnée à 64 Mo.
+- **Suite** : merge `dev` → `main`, création de la ressource Coolify, secrets CI, puis run de 24 h
 - **`infra/` retiré du repo** (choix de Julien) : les composes Redpanda et Garage partagés vivent dans Coolify. Dernière version versionnée : commit `e4964a6`.
