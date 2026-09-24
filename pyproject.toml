@@ -1,24 +1,55 @@
 [project]
 name = "bluesky-streamhouse"
 version = "0.1.0"
-description = "streamhouse"
+description = "Real-time Bluesky streamhouse benchmarking PySpark + Iceberg against Quix Streams + DuckLake"
 readme = "README.md"
-authors = [{ name = "Julien" }]
-requires-python = ">=3.12"
+authors = [{ name = "Julien Castellano" }]
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "python-dotenv",
-    "loguru"
+    "loguru",
 ]
 
-[project.scripts]
-"bluesky-streamhouse" = "src.main:main"
-
+# One dependency group per Docker service, so each image only installs what it needs.
+# Local development installs everything: `uv sync --all-groups`.
+# Versions pinned per roadmap.md ("Versions épinglées").
 [dependency-groups]
+producer = [
+    "websockets>=15",
+    "confluent-kafka>=2.8.2,<2.12",
+]
+quix = [
+    "quixstreams>=3.26,<4",
+    "duckdb>=1.5,<1.6",
+]
+spark = [
+    "pyspark==4.1.3",
+    "dbt-core>=1.12,<1.13",
+    "dbt-spark[session]>=1.11,<1.12",
+]
+dagster = [
+    "dagster>=1.13,<1.14",
+    "dagster-postgres",
+    "dbt-core>=1.12,<1.13",
+    "dbt-duckdb>=1.11,<1.12",
+    "s3fs",
+]
+benchmark = [
+    "docker>=7",
+]
+api = [
+    "fastapi",
+    "uvicorn",
+    "duckdb>=1.5,<1.6",
+]
 dev = [
     "pytest",
     "ruff",
     "pre-commit",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

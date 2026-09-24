@@ -1,0 +1,77 @@
+# =============================================================================
+# Redpanda — shared Kafka-compatible broker (Coolify service, decision D9)
+# Deployed as its own Coolify resource, independent from project redeploys.
+#
+# Services:
+#   - redpanda:         single-node broker
+#       * internal listener  redpanda:9092     → apps on the `coolify` network
+#       * tunnel listener    127.0.0.1:19092   → SSH tunnel only, never public
+#   - redpanda-console: web UI on port 8088, bound to CONSOLE_BIND_IP (no auth in the free edition)
+#       * CONSOLE_BIND_IP unset         → 127.0.0.1, SSH tunnel only
+#       * CONSOLE_BIND_IP=<tailscale IP> → http://<tailscale IP>:8088 from the tailnet only
+#
+# Kafka access from your laptop (the local port must be 19092, it is the advertised one):
+#   ssh -N -L 19092:127.0.0.1:19092 <user>@<vps>
+#
+# Topics are created explicitly by the producer (auto-creation disabled).
+# Network: coolify (external)
+# =============================================================================
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    container_name: redpanda
+    command:
+      - redpanda start
+      # Shared VPS: 1 core, bounded memory, no CPU pinning
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,tunnel://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,tunnel://localhost:19092
+      - --set redpanda.auto_create_topics_enabled=false
+      - --default-log-level=info
+    ports:
+      - "127.0.0.1:19092:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - coolify
+    restart: always
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v3.12.0
+    container_name: redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      # Never bind to a public IP: the console has no authentication
+      - "${CONSOLE_BIND_IP:-127.0.0.1}:8088:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    networks:
+      - coolify
+    restart: always
+
+volumes:
+  redpanda-data:
+
+networks:
+  coolify:
+    external: true
+    name: coolify
