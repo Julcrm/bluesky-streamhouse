@@ -1,0 +1,35 @@
+[project]
+name = "bluesky-streamhouse"
+version = "0.1.0"
+description = "streamhouse"
+readme = "README.md"
+authors = [{ name = "Julien" }]
+requires-python = ">=3.12"
+dependencies = [
+    "python-dotenv",
+    "loguru"
+]
+
+[project.scripts]
+"bluesky-streamhouse" = "src.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "pre-commit",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # Style errors (pycodestyle)
+    "F",   # Logic errors (pyflakes)
+    "I",   # Import sorting (isort)
+    "UP",  # Deprecated Python syntax (pyupgrade)
+    "B",   # Likely bugs (flake8-bugbear)
+]
+fixable = ["ALL"] # Allow ruff to auto-fix everything it can
