@@ -9,3 +9,6 @@ __pycache__
 dist
 build
 *.egg-info
+.idea
+dbt/*/target
+dbt/*/dbt_packages

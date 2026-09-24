@@ -1,0 +1,109 @@
+# =============================================================================
+# Bluesky Streamhouse — local development stack (mirrors the VPS services)
+# Services:
+#   - redpanda:         Kafka-compatible broker (external listener localhost:19092)
+#   - redpanda-console: web UI for topics and consumer groups (localhost:8088)
+#   - garage:           S3-compatible object storage, single node (localhost:3900)
+#                       bucket + access key auto-created from .env on first start
+#   - postgres:         DuckLake catalog + Dagster storage (localhost:5432)
+# Usage: make up / make down / make logs
+# All ports are bound to 127.0.0.1: nothing is reachable from the local network.
+# Credentials come from .env (created from .env.example by `make up`), local only.
+# =============================================================================
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    container_name: bsh-redpanda
+    command:
+      - redpanda start
+      - --mode dev-container
+      - --smp 1
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v3.12.0
+    container_name: bsh-redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports:
+      - "127.0.0.1:${REDPANDA_CONSOLE_PORT:-8088}:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # Same image and config as production (infra/garage/), decision D8.
+  # --default-bucket creates BUCKET and the AWS_* access key on first start.
+  garage:
+    image: dxflrs/garage:v2.4.1
+    container_name: bsh-garage
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?set in .env}
+      GARAGE_DEFAULT_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:?set in .env}
+      GARAGE_DEFAULT_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:?set in .env}
+      GARAGE_DEFAULT_BUCKET: ${BUCKET:-bluesky-streamhouse}
+    configs:
+      - source: garage_toml
+        target: /etc/garage.toml
+    ports:
+      - "127.0.0.1:3900:3900"
+    volumes:
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:18.6-alpine
+    container_name: bsh-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
+      POSTGRES_DB: ${DUCKLAKE_CATALOG_DB:-ducklake_catalog}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+configs:
+  garage_toml:
+    content: |
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "lmdb"
+
+      replication_factor = 1
+
+      rpc_bind_addr = "[::]:3901"
+      rpc_public_addr = "127.0.0.1:3901"
+
+      [s3_api]
+      s3_region = "us-east-1"
+      api_bind_addr = "[::]:3900"
+      root_domain = ".s3.garage.localhost"
+
+volumes:
+  redpanda-data:
+  garage-meta:
+  garage-data:
+  postgres-data:

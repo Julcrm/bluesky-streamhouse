@@ -21,7 +21,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --all-groups
 
       - name: Lint with ruff
         run: uv run ruff check .
@@ -31,3 +31,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+      - name: Check uv.lock is up to date
+        run: uv lock --check
