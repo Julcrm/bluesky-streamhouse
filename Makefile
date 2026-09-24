@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -51,6 +51,12 @@ logs:
 
 ps:
 	$(COMPOSE_DEV) ps
+
+# --- Pipeline ---
+
+# Jetstream -> Redpanda `raw_events` (Ctrl+C flushes and exits)
+produce: check_uv
+	uv run python -m src.ingestion.producer
 
 clean:
 	rm -rf .venv

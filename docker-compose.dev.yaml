@@ -1,7 +1,7 @@
 # =============================================================================
 # Bluesky Streamhouse — local development stack (mirrors the VPS services)
 # Services:
-#   - redpanda:         Kafka-compatible broker (external listener localhost:19092)
+#   - redpanda:         Kafka-compatible broker (external listener 127.0.0.1:19092)
 #   - redpanda-console: web UI for topics and consumer groups (localhost:8088)
 #   - garage:           S3-compatible object storage, single node (localhost:3900)
 #                       bucket + access key auto-created from .env on first start
@@ -20,7 +20,7 @@ services:
       - --mode dev-container
       - --smp 1
       - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://127.0.0.1:19092
     ports:
       - "127.0.0.1:19092:19092"
     volumes:
@@ -42,7 +42,7 @@ services:
       redpanda:
         condition: service_healthy
 
-  # Same image and config as production (infra/garage/), decision D8.
+  # Same image and config as the production Garage (Coolify resource), decision D8.
   # --default-bucket creates BUCKET and the AWS_* access key on first start.
   garage:
     image: dxflrs/garage:v2.4.1

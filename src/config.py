@@ -1,13 +1,21 @@
 """
 Centralized configuration for the Bluesky Streamhouse project.
 All URLs, topics, storage paths and parameters are defined here.
-Values that differ between environments are read from environment variables.
+Values that differ between environments are read from environment variables,
+loaded from `.env` when present (local runs; containers get real env vars).
 """
 
 import os
 
-# --- Bluesky Jetstream ---
-JETSTREAM_URL = os.getenv("JETSTREAM_URL", "wss://jetstream2.us-east.bsky.network/subscribe")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- Bluesky Jetstream (v2 API) ---
+JETSTREAM_URL = os.getenv(
+    "JETSTREAM_URL",
+    "wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents",
+)
 
 # Collections ingested (decision D2)
 JETSTREAM_COLLECTIONS = (
@@ -16,9 +24,16 @@ JETSTREAM_COLLECTIONS = (
     "app.bsky.feed.repost",
     "app.bsky.graph.follow",
 )
+# identity/account/sync events ignore the collection filter: keep commits only
+JETSTREAM_KINDS = ("commit",)
+# On restart, never replay more than this: an older cursor is capped (gap is logged)
+JETSTREAM_MAX_REPLAY_MINUTES = int(os.getenv("JETSTREAM_MAX_REPLAY_MINUTES", "60"))
 
 # --- Redpanda (Kafka API) ---
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:19092")
+# 127.0.0.1 rather than localhost: avoids librdkafka trying IPv6 (::1) first
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092")
+
+PRODUCER_STATS_INTERVAL_SECONDS = 30
 
 RAW_EVENTS_TOPIC = "raw_events"
 RAW_EVENTS_PARTITIONS = 3
