@@ -31,7 +31,6 @@ from src import config
 class RawEvent:
     """One Jetstream message ready to be produced to Kafka."""
 
-    key: bytes  # author DID: keeps each account's events ordered in one partition
     value: bytes  # raw message, unchanged (Bronze fidelity)
     seq: int  # Jetstream sequence number, used as resume cursor and dedup key
     timestamp_ms: int  # event time, used as the Kafka record timestamp
@@ -52,12 +51,11 @@ def build_subscribe_url(
 
 
 def parse_event(raw: str | bytes) -> RawEvent | None:
-    """Extract Kafka key, seq and event time from a raw message; None if unusable."""
+    """Extract seq and event time from a raw message; None if unusable."""
     try:
         message = json.loads(raw)
         payload = message["payload"]
         seq = int(payload["seq"])
-        did = payload["did"]
         event_time = datetime.fromisoformat(payload["time"])
     except (ValueError, KeyError, TypeError):
         return None
@@ -65,7 +63,6 @@ def parse_event(raw: str | bytes) -> RawEvent | None:
         return None
     value = raw.encode() if isinstance(raw, str) else raw
     return RawEvent(
-        key=did.encode(),
         value=value,
         seq=seq,
         timestamp_ms=int(event_time.timestamp() * 1000),
@@ -99,9 +96,19 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 60.0, jitter: fl
 # --- Kafka helpers ---
 
 
+def kafka_base_config(bootstrap_servers: str) -> dict[str, str]:
+    """Settings shared by every librdkafka client (admin, consumer, producer)."""
+    return {
+        "bootstrap.servers": bootstrap_servers,
+        # Redpanda only listens on IPv4, but `redpanda` (coolify network) and
+        # `localhost` also resolve to IPv6: without this, the first connection fails
+        "broker.address.family": "v4",
+    }
+
+
 def ensure_topic(bootstrap_servers: str) -> None:
     """Create `raw_events` with the configured partitions and retention if missing."""
-    admin = AdminClient({"bootstrap.servers": bootstrap_servers})
+    admin = AdminClient(kafka_base_config(bootstrap_servers))
     topic = NewTopic(
         config.RAW_EVENTS_TOPIC,
         num_partitions=config.RAW_EVENTS_PARTITIONS,
@@ -126,7 +133,7 @@ def read_last_events(bootstrap_servers: str) -> list[tuple[int, int]]:
     """Read the last message of each partition and return its (seq, timestamp_ms)."""
     consumer = Consumer(
         {
-            "bootstrap.servers": bootstrap_servers,
+            **kafka_base_config(bootstrap_servers),
             "group.id": "jetstream-producer-resume",
             "enable.auto.commit": False,
         }
@@ -154,12 +161,16 @@ def build_producer(bootstrap_servers: str) -> Producer:
     """Idempotent, fully acknowledged, zstd-compressed producer."""
     return Producer(
         {
-            "bootstrap.servers": bootstrap_servers,
+            **kafka_base_config(bootstrap_servers),
             "client.id": "jetstream-producer",
             "acks": "all",
             "enable.idempotence": True,
             "compression.type": "zstd",
             "linger.ms": 50,
+            # Messages have no key (per-account ordering is not needed, Silver sorts
+            # on time_us/seq): the sticky partitioner fills one partition per linger
+            # window, so partitions stay balanced and batches compress well
+            "sticky.partitioning.linger.ms": 50,
             # Bound the local queue (default 1 GB): if Redpanda is down, produce()
             # raises BufferError and ingestion slows down instead of exhausting memory
             "queue.buffering.max.kbytes": 65536,
@@ -204,7 +215,6 @@ class JetstreamIngestor:
             try:
                 self.producer.produce(
                     config.RAW_EVENTS_TOPIC,
-                    key=event.key,
                     value=event.value,
                     timestamp=event.timestamp_ms,
                     on_delivery=self._on_delivery,
