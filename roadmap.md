@@ -11,7 +11,7 @@
 > 2. ~~Secrets CI du repo~~ : configurés par Julien le 2026-09-25. Vérifier au prochain push sur `main` que le job `deploy` passe.
 > 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
 > 4. ~~Correctif IPv4 producer~~ : `broker.address.family=v4` sur les 3 clients librdkafka, branche `fix/producer-ipv4` (vérifié contre Redpanda prod le 2026-09-26, plus d'erreur IPv6).
-> 5. **Avant la phase 2** : trancher le déséquilibre des partitions (clé `did` : 32 k / 99 k / 130 k messages sur les 3 partitions en prod). Options : clé = `seq` ou aléatoire (l'ordre par compte n'est pas nécessaire en Bronze), ou plus de partitions.
+> 5. ~~Déséquilibre des partitions~~ : tranché (D11), messages sans clé, branche `fix/producer-ipv4`.
 
 ---
 
@@ -144,6 +144,7 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (ressource Coolify, compose hors de ce repo), MinIO supprimé le 2026-09-24 |
 | D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
 | D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
+| D11 | Clé des messages `raw_events` | `did` · aucune clé · `seq` · plus de partitions | Aucune clé + sticky partitioner (`sticky.partitioning.linger.ms` = `linger.ms` = 50) : ordre par compte inutile (Silver trie sur `time_us`/`seq`), et la clé `did` biaisait le débit de rattrapage de Spark (une tâche par partition). 3 partitions conservées | **tranché le 2026-09-26** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -174,7 +175,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] `producer.py` : client WebSocket **Jetstream v2** (`/xrpc/network.bsky.jetstream.subscribeEvents`), filtres `collections` + `kinds=commit`
 - [x] Reconnexion avec backoff exponentiel + jitter ; reprise au dernier `seq` lu **dans le topic** (pas d'état local), replay plafonné à 60 min
 - [x] Coupure réseau en cours de session testée (règle pare-feu sur tcp/443 pendant 40 s) : détection en 15 s par keepalive (≤ 20 s), reprise au dernier `seq` acquitté, un seul doublon à la borne, 0 perte
-- [x] Clé de message `did`, zstd, `acks=all`, idempotence, horodatage = heure de l'événement
+- [x] Messages sans clé (D11, à l'origine `did`), zstd, `acks=all`, idempotence, horodatage = heure de l'événement
 - [x] Topic `raw_events` créé par le producer : 3 partitions, `retention.ms` = 24 h, `CreateTime`
 - [x] Logs toutes les 30 s : msg/s, KiB/s, lag, dernier `seq` acquitté, erreurs de livraison
 - [x] Tests unitaires : URL, parsing, choix du curseur (dont plafond de rejeu), backoff
@@ -358,3 +359,4 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Quelques gros trous** (21 k et 10 k numéros vers le `seq` 26 300,2 M, soit environ 02:40 UTC le 25/09) ne tombent sur **aucune reconnexion** du producer : probablement des pertes côté Jetstream. À dater précisément si on veut le documenter.
 - Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
 - **Correctif IPv4** (`fix/producer-ipv4`) : `kafka_base_config()` partagé par AdminClient, Consumer et Producer, avec `broker.address.family=v4`. Testé depuis un conteneur jetable sur le réseau `coolify` : plus d'erreur `Connect to ipv6#…`.
+- **D11 tranché : messages sans clé.** La clé `did` donnait ×1,4 sur une partition (quelques DID très actifs), ce qui aurait ralenti le rattrapage de Spark sur une seule tâche. Test local sur 91 k messages : 30,7 k / 30,6 k / 29,9 k. Commit `feat(producer)` sur `fix/producer-ipv4` ; en prod au prochain déploiement.
