@@ -3,7 +3,13 @@
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from src.ingestion.producer import backoff_delay, build_subscribe_url, parse_event, resume_cursor
+from src.ingestion.producer import (
+    backoff_delay,
+    build_subscribe_url,
+    kafka_base_config,
+    parse_event,
+    resume_cursor,
+)
 
 BASE = "wss://jetstream.example/xrpc/network.bsky.jetstream.subscribeEvents"
 
@@ -41,12 +47,11 @@ def test_subscribe_url_without_cursor_is_live_tail() -> None:
     assert "cursor" not in build_subscribe_url(BASE, ("app.bsky.feed.post",), ("commit",))
 
 
-def test_parse_event_extracts_key_seq_and_time() -> None:
-    """A commit gives the DID as key, its seq, and the event time in ms."""
+def test_parse_event_extracts_seq_and_time() -> None:
+    """A commit gives its seq and the event time in ms."""
     raw = _commit(seq=26281967014, did="did:plc:hthoz")
     event = parse_event(raw)
     assert event is not None
-    assert event.key == b"did:plc:hthoz"
     assert event.seq == 26281967014
     assert event.timestamp_ms == 1790264770500
     assert event.value == raw.encode()
@@ -83,3 +88,8 @@ def test_backoff_delay_grows_and_is_capped() -> None:
     assert [backoff_delay(a) for a in range(4)] == [1, 2, 4, 8]
     assert backoff_delay(20) == 60
     assert backoff_delay(0, jitter=0.5) == 1.5
+
+
+def test_kafka_base_config_forces_ipv4():
+    conf = kafka_base_config("redpanda:9092")
+    assert conf == {"bootstrap.servers": "redpanda:9092", "broker.address.family": "v4"}
