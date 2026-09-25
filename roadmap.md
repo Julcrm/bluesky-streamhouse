@@ -3,7 +3,7 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda (run de 24 h validé, clôture à confirmer)
+**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze)
 **Dernière mise à jour :** 2026-09-26
 
 > **Prochaine session : commencer ici**
@@ -145,6 +145,7 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
 | D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
 | D11 | Clé des messages `raw_events` | `did` · aucune clé · `seq` · plus de partitions | Aucune clé + sticky partitioner (`sticky.partitioning.linger.ms` = `linger.ms` = 50) : ordre par compte inutile (Silver trie sur `time_us`/`seq`), et la clé `did` biaisait le débit de rattrapage de Spark (une tâche par partition). 3 partitions conservées | **tranché le 2026-09-26** |
+| D12 | Catalogue DuckLake en prod | Base dans le Postgres partagé (`v8kok…`) · conteneur Postgres dédié | Conteneur dédié recommandé (coût du catalogue attribuable à la branche B) | **tranché le 2026-09-26 : Postgres partagé**, base et rôle dédiés. Instance peu chargée (n8n retiré, bot quasi inactif). Limite acceptée : le CPU/RAM du catalogue n'est pas isolé par conteneur, à estimer via `pg_stat_database` sur la base DuckLake (phase 7) |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -189,6 +190,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 ### Phase 2 — Branche B : Quix Streams → DuckLake (Bronze)
 **Objectif :** écriture streaming vers DuckLake.
 
+- [ ] Prod (D12) : base `ducklake_catalog` + rôle dédié (pas `postgres`) sur le Postgres partagé, bucket Garage `bluesky-streamhouse` + clé dédiée
 - [ ] `resources/ducklake.py` : `ATTACH 'ducklake:postgres:…'` avec `DATA_PATH` sur Garage
 - [ ] Application Quix Streams : topic `raw_events` → parsing (StreamingDataFrame) → `BatchingSink` custom vers DuckLake (taille et délai de batch)
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
@@ -360,3 +362,10 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
 - **Correctif IPv4** (`fix/producer-ipv4`) : `kafka_base_config()` partagé par AdminClient, Consumer et Producer, avec `broker.address.family=v4`. Testé depuis un conteneur jetable sur le réseau `coolify` : plus d'erreur `Connect to ipv6#…`.
 - **D11 tranché : messages sans clé.** La clé `did` donnait ×1,4 sur une partition (quelques DID très actifs), ce qui aurait ralenti le rattrapage de Spark sur une seule tâche. Test local sur 91 k messages : 30,7 k / 30,6 k / 29,9 k. Commit `feat(producer)` sur `fix/producer-ipv4` ; en prod au prochain déploiement.
+
+### 2026-09-26 — Déploiement auto, D11 en prod, D12
+- **Premier déploiement CI via Tailscale** (merge `a21a387`, PR #6). Deux pièges : le subject OIDC GitHub de ce repo est au nouveau format à IDs immuables (`repo:Julcrm@173714792/bluesky-streamhouse@1385213211:ref:refs/heads/main`), que le joker `repo:Julcrm/*` ne couvre pas ; et `COOLIFY_WEBHOOK_URL` pointait sur le domaine (403 `Forbidden` de Traefik, 9 octets). Note du vault mise à jour.
+- **Producer redéployé** à 23:24 UTC : reprise au curseur lu dans le topic, plus d'erreur IPv6, 36 Mio de RAM. **Partitions sur ~6 min : +68,3 k / +68,9 k / +67,4 k (écart de 2 %)**, D11 validé en prod.
+- Mesure : compter par écart de high-watermark, pas par `rpk consume -o @timestamp` (le timestamp est l'heure de l'événement, pas de l'écriture).
+- **Phase 1 close.**
+- **D12 tranché : catalogue DuckLake dans le Postgres partagé**, base et rôle dédiés.
