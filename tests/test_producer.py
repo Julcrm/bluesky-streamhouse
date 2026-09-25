@@ -3,7 +3,13 @@
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from src.ingestion.producer import backoff_delay, build_subscribe_url, parse_event, resume_cursor
+from src.ingestion.producer import (
+    backoff_delay,
+    build_subscribe_url,
+    kafka_base_config,
+    parse_event,
+    resume_cursor,
+)
 
 BASE = "wss://jetstream.example/xrpc/network.bsky.jetstream.subscribeEvents"
 
@@ -83,3 +89,8 @@ def test_backoff_delay_grows_and_is_capped() -> None:
     assert [backoff_delay(a) for a in range(4)] == [1, 2, 4, 8]
     assert backoff_delay(20) == 60
     assert backoff_delay(0, jitter=0.5) == 1.5
+
+
+def test_kafka_base_config_forces_ipv4():
+    conf = kafka_base_config("redpanda:9092")
+    assert conf == {"bootstrap.servers": "redpanda:9092", "broker.address.family": "v4"}

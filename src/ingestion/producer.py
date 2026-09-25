@@ -99,9 +99,19 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 60.0, jitter: fl
 # --- Kafka helpers ---
 
 
+def kafka_base_config(bootstrap_servers: str) -> dict[str, str]:
+    """Settings shared by every librdkafka client (admin, consumer, producer)."""
+    return {
+        "bootstrap.servers": bootstrap_servers,
+        # Redpanda only listens on IPv4, but `redpanda` (coolify network) and
+        # `localhost` also resolve to IPv6: without this, the first connection fails
+        "broker.address.family": "v4",
+    }
+
+
 def ensure_topic(bootstrap_servers: str) -> None:
     """Create `raw_events` with the configured partitions and retention if missing."""
-    admin = AdminClient({"bootstrap.servers": bootstrap_servers})
+    admin = AdminClient(kafka_base_config(bootstrap_servers))
     topic = NewTopic(
         config.RAW_EVENTS_TOPIC,
         num_partitions=config.RAW_EVENTS_PARTITIONS,
@@ -126,7 +136,7 @@ def read_last_events(bootstrap_servers: str) -> list[tuple[int, int]]:
     """Read the last message of each partition and return its (seq, timestamp_ms)."""
     consumer = Consumer(
         {
-            "bootstrap.servers": bootstrap_servers,
+            **kafka_base_config(bootstrap_servers),
             "group.id": "jetstream-producer-resume",
             "enable.auto.commit": False,
         }
@@ -154,7 +164,7 @@ def build_producer(bootstrap_servers: str) -> Producer:
     """Idempotent, fully acknowledged, zstd-compressed producer."""
     return Producer(
         {
-            "bootstrap.servers": bootstrap_servers,
+            **kafka_base_config(bootstrap_servers),
             "client.id": "jetstream-producer",
             "acks": "all",
             "enable.idempotence": True,
