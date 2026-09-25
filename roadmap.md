@@ -3,12 +3,12 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda
-**Dernière mise à jour :** 2026-09-24
+**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda (run de 24 h validé, clôture à confirmer)
+**Dernière mise à jour :** 2026-09-26
 
 > **Prochaine session : commencer ici**
-> 1. **Contrôle du run producer** (démarré le 2026-09-24 à 16:21 UTC en prod, ressource Coolify `nji5qadaz1pobiikeumiv4a5`), à faire **après le 2026-09-25 16:22 UTC** : 0 redémarrage, aucun trou de `seq` hors bornes de reprise, taille du topic (plateau attendu ~6,7 Go), disque du VPS. Si OK : phase 1 close.
-> 2. **Secrets CI du repo** pour le déploiement auto : `TS_OAUTH_CLIENT_ID` et `TS_AUDIENCE` (credential Tailscale pour `repo:Julcrm/bluesky-streamhouse:ref:refs/heads/main`, ou le joker `repo:Julcrm/*:ref:refs/heads/main`), `COOLIFY_WEBHOOK_SECRET` (jeton Coolify de velib), `COOLIFY_WEBHOOK_URL` = `http://100.125.33.49:8000/api/v1/deploy?uuid=nji5qadaz1pobiikeumiv4a5&force=false`.
+> 1. ~~Contrôle du run producer~~ : fait le 2026-09-25, voir journal.
+> 2. ~~Secrets CI du repo~~ : configurés par Julien le 2026-09-25. Vérifier au prochain push sur `main` que le job `deploy` passe.
 > 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
 > 4. **Petits correctifs producer** : forcer IPv4 côté librdkafka (`broker.address.family=v4`), parce que `redpanda` se résout aussi en IPv6 sur le réseau `coolify` (1 erreur bruyante au démarrage).
 > 5. **Avant la phase 2** : trancher le déséquilibre des partitions (clé `did` : 32 k / 99 k / 130 k messages sur les 3 partitions en prod). Options : clé = `seq` ou aléatoire (l'ordre par compte n'est pas nécessaire en Bronze), ou plus de partitions.
@@ -180,7 +180,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Tests unitaires : URL, parsing, choix du curseur (dont plafond de rejeu), backoff
 - [x] `docker/producer/Dockerfile` (Python 3.12.14-slim, uv 0.12.18, groupe `producer`, non-root, arrêt propre sur SIGTERM) + `make produce`
 - [x] Volume mesuré (voir journal)
-- [ ] Déployer le producer sur le VPS (service Coolify, `KAFKA_BOOTSTRAP_SERVERS=redpanda:9092`) pour le run de 24 h
+- [x] Déployer le producer sur le VPS (service Coolify, `KAFKA_BOOTSTRAP_SERVERS=redpanda:9092`) pour le run de 24 h (validé le 2026-09-25, voir journal)
 
 **Fini quand :** 24 h d'ingestion sans trou, et un redémarrage du producer ne perd pas d'événements.
 **Piège :** au premier démarrage, le rejeu Jetstream peut inonder Redpanda ; limiter la fenêtre du curseur.
@@ -347,3 +347,13 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - Taille réelle en prod : **~192 B/msg**, soit ~280 Mo/h et un plateau attendu à ~6,7 Go avec 24 h de rétention (~10 Go à 36 h). 214 Go libres sur le VPS.
 - `__consumer_offsets` créé automatiquement (consumer de reprise du producer) : topic système, ne pas toucher.
 - `dev`/`main` : 2 commits de la phase 1 poussés après le merge de la PR #2, rattrapés par des merges git (`f4e0773`, `dffc58c`). Règle : pousser tout **avant** de merger.
+
+### 2026-09-25 — Contrôle du run de 24 h
+- **Producer** : 30 h de run, **0 redémarrage**, 0 OOM, 68 Mio / 256 Mio, ~5 % de CPU, 0 erreur de livraison, lag 0,1 s.
+- **Topic `raw_events`** : **6,6 Go**, plateau atteint, la rétention de 24 h purge bien. Disque du VPS : 208 Go libres.
+- **Partitions sur 24 h** : 14,0 M / 10,7 M / 10,0 M messages (×1,4), moins déséquilibrées que la mesure à chaud (×2,5). Le sujet reste ouvert avant la phase 2.
+- **Incident Jetstream** le 2026-09-25 à 17:12 UTC (`502 upstream unavailable` côté serveur, reprise à 17:14 par le backoff), puis 5 coupures « keepalive ping timeout » jusqu'à 19:09, toutes reprises en moins de 2 s.
+- **Audit `seq`** (scan en lecture seule de tout le topic, bitmap, fenêtre commune aux 3 partitions) : 34,9 M messages, **7 doublons pour 7 reprises**, soit exactement le `seq` inclusif de chaque borne : **aucune perte côté producer**.
+- **Le `seq` n'est pas dense** dans le flux filtré : ~3,5 % de trous, dont 99 % de 1 à 3 numéros. Ils sont répartis uniformément, donc structurels : Jetstream numérote aussi les événements qu'il filtre. On ne peut pas vérifier la complétude par la contiguïté du `seq` ; en aval, dédoublonner sur `seq` suffit.
+- **Quelques gros trous** (21 k et 10 k numéros vers le `seq` 26 300,2 M, soit environ 02:40 UTC le 25/09) ne tombent sur **aucune reconnexion** du producer : probablement des pertes côté Jetstream. À dater précisément si on veut le documenter.
+- Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
