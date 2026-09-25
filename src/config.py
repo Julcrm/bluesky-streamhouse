@@ -47,6 +47,8 @@ QUIX_CONSUMER_GROUP = "branch-b-quix"
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://localhost:3900")
 # Garage rejects signatures without the configured region (decision D8)
 S3_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+S3_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+S3_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 BUCKET = os.getenv("BUCKET", "bluesky-streamhouse")
 
 ICEBERG_WAREHOUSE = f"s3a://{BUCKET}/iceberg"
@@ -56,7 +58,13 @@ DUCKLAKE_DATA_PATH = f"s3://{BUCKET}/ducklake/"
 # --- Postgres (DuckLake catalog) ---
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_USER = os.getenv("POSTGRES_USER", "")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 DUCKLAKE_CATALOG_DB = os.getenv("DUCKLAKE_CATALOG_DB", "ducklake_catalog")
+DUCKLAKE_ALIAS = "lake"
+# Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet.
+# 10 is DuckLake's default, pinned here so the benchmark setting is explicit (phase 2)
+DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "10"))
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

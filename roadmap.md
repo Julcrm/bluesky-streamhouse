@@ -191,11 +191,11 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 **Objectif :** écriture streaming vers DuckLake.
 
 - [x] Prod (D12) : base `ducklake_catalog` (propriétaire `postgres`, choix de Julien) sur le Postgres partagé `v8kok…`, bucket Garage `bluesky-streamhouse` + clé `bluesky` (RWO sur ce bucket seul, `datagrip` en RWO aussi) — 2026-09-26
-- [ ] `resources/ducklake.py` : `ATTACH 'ducklake:postgres:…'` avec `DATA_PATH` sur Garage
+- [x] `resources/ducklake.py` : `connect()` sans dépendance Dagster, secrets DuckDB (S3 + Postgres **par défaut, sans nom** : DuckLake ignore les secrets Postgres nommés), `ATTACH 'ducklake:postgres:'` avec `DATA_PATH` sur Garage, `DATA_INLINING_ROW_LIMIT` (non persisté, repassé à chaque ATTACH) et `READ_ONLY` en option
 - [ ] Application Quix Streams : topic `raw_events` → parsing (StreamingDataFrame) → `BatchingSink` custom vers DuckLake (taille et délai de batch)
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
 - [ ] Idempotence : commit des offsets après écriture du batch (at-least-once) et dédoublonnage sur la clé naturelle `(did, collection, rkey, time_us)`
-- [ ] `docker/quix/Dockerfile`
+- [ ] `docker/quix/Dockerfile` (extensions DuckDB `ducklake`, `postgres`, `httpfs` installées au build, pas au runtime)
 - [ ] Tests unitaires des étapes de transformation (sans Kafka)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
@@ -370,3 +370,4 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Phase 1 close.**
 - **D12 tranché : catalogue DuckLake dans le Postgres partagé**, base `ducklake_catalog` avec le superuser `postgres`. Base `n8n` supprimée (plus en prod, aucune connexion ni conteneur).
 - **Garage** : bucket `bluesky-streamhouse`, clé `bluesky` (`GK833d…`) en RWO sur ce bucket uniquement, `datagrip` en RWO aussi. Le bucket `etl` n'existe plus.
+- **`resources/ducklake.py`** : DuckLake format 1.0 (DuckDB 1.5.5). `DATA_PATH` est enregistré dans le catalogue au premier ATTACH ; la limite d'inlining ne l'est pas. Limite par défaut : **10 lignes** (au-delà, un INSERT écrit directement un Parquet) : avec des batchs Quix de plusieurs milliers de lignes, l'inlining ne jouera que si on la relève (expérience du point 3). Test d'intégration sur la stack locale, ignoré en CI.
