@@ -47,12 +47,11 @@ def test_subscribe_url_without_cursor_is_live_tail() -> None:
     assert "cursor" not in build_subscribe_url(BASE, ("app.bsky.feed.post",), ("commit",))
 
 
-def test_parse_event_extracts_key_seq_and_time() -> None:
-    """A commit gives the DID as key, its seq, and the event time in ms."""
+def test_parse_event_extracts_seq_and_time() -> None:
+    """A commit gives its seq and the event time in ms."""
     raw = _commit(seq=26281967014, did="did:plc:hthoz")
     event = parse_event(raw)
     assert event is not None
-    assert event.key == b"did:plc:hthoz"
     assert event.seq == 26281967014
     assert event.timestamp_ms == 1790264770500
     assert event.value == raw.encode()

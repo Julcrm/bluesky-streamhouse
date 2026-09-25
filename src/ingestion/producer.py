@@ -31,7 +31,6 @@ from src import config
 class RawEvent:
     """One Jetstream message ready to be produced to Kafka."""
 
-    key: bytes  # author DID: keeps each account's events ordered in one partition
     value: bytes  # raw message, unchanged (Bronze fidelity)
     seq: int  # Jetstream sequence number, used as resume cursor and dedup key
     timestamp_ms: int  # event time, used as the Kafka record timestamp
@@ -52,12 +51,11 @@ def build_subscribe_url(
 
 
 def parse_event(raw: str | bytes) -> RawEvent | None:
-    """Extract Kafka key, seq and event time from a raw message; None if unusable."""
+    """Extract seq and event time from a raw message; None if unusable."""
     try:
         message = json.loads(raw)
         payload = message["payload"]
         seq = int(payload["seq"])
-        did = payload["did"]
         event_time = datetime.fromisoformat(payload["time"])
     except (ValueError, KeyError, TypeError):
         return None
@@ -65,7 +63,6 @@ def parse_event(raw: str | bytes) -> RawEvent | None:
         return None
     value = raw.encode() if isinstance(raw, str) else raw
     return RawEvent(
-        key=did.encode(),
         value=value,
         seq=seq,
         timestamp_ms=int(event_time.timestamp() * 1000),
@@ -170,6 +167,10 @@ def build_producer(bootstrap_servers: str) -> Producer:
             "enable.idempotence": True,
             "compression.type": "zstd",
             "linger.ms": 50,
+            # Messages have no key (per-account ordering is not needed, Silver sorts
+            # on time_us/seq): the sticky partitioner fills one partition per linger
+            # window, so partitions stay balanced and batches compress well
+            "sticky.partitioning.linger.ms": 50,
             # Bound the local queue (default 1 GB): if Redpanda is down, produce()
             # raises BufferError and ingestion slows down instead of exhausting memory
             "queue.buffering.max.kbytes": 65536,
@@ -214,7 +215,6 @@ class JetstreamIngestor:
             try:
                 self.producer.produce(
                     config.RAW_EVENTS_TOPIC,
-                    key=event.key,
                     value=event.value,
                     timestamp=event.timestamp_ms,
                     on_delivery=self._on_delivery,
