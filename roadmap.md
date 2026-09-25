@@ -10,7 +10,7 @@
 > 1. ~~Contrôle du run producer~~ : fait le 2026-09-25, voir journal.
 > 2. ~~Secrets CI du repo~~ : configurés par Julien le 2026-09-25. Vérifier au prochain push sur `main` que le job `deploy` passe.
 > 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
-> 4. **Petits correctifs producer** : forcer IPv4 côté librdkafka (`broker.address.family=v4`), parce que `redpanda` se résout aussi en IPv6 sur le réseau `coolify` (1 erreur bruyante au démarrage).
+> 4. ~~Correctif IPv4 producer~~ : `broker.address.family=v4` sur les 3 clients librdkafka, branche `fix/producer-ipv4` (vérifié contre Redpanda prod le 2026-09-26, plus d'erreur IPv6).
 > 5. **Avant la phase 2** : trancher le déséquilibre des partitions (clé `did` : 32 k / 99 k / 130 k messages sur les 3 partitions en prod). Options : clé = `seq` ou aléatoire (l'ordre par compte n'est pas nécessaire en Bronze), ou plus de partitions.
 
 ---
@@ -357,3 +357,4 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Le `seq` n'est pas dense** dans le flux filtré : ~3,5 % de trous, dont 99 % de 1 à 3 numéros. Ils sont répartis uniformément, donc structurels : Jetstream numérote aussi les événements qu'il filtre. On ne peut pas vérifier la complétude par la contiguïté du `seq` ; en aval, dédoublonner sur `seq` suffit.
 - **Quelques gros trous** (21 k et 10 k numéros vers le `seq` 26 300,2 M, soit environ 02:40 UTC le 25/09) ne tombent sur **aucune reconnexion** du producer : probablement des pertes côté Jetstream. À dater précisément si on veut le documenter.
 - Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
+- **Correctif IPv4** (`fix/producer-ipv4`) : `kafka_base_config()` partagé par AdminClient, Consumer et Producer, avec `broker.address.family=v4`. Testé depuis un conteneur jetable sur le réseau `coolify` : plus d'erreur `Connect to ipv6#…`.
