@@ -3,8 +3,15 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda
-**Dernière mise à jour :** 2026-09-24
+**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda (run de 24 h validé, clôture à confirmer)
+**Dernière mise à jour :** 2026-09-26
+
+> **Prochaine session : commencer ici**
+> 1. ~~Contrôle du run producer~~ : fait le 2026-09-25, voir journal.
+> 2. ~~Secrets CI du repo~~ : configurés par Julien le 2026-09-25. Vérifier au prochain push sur `main` que le job `deploy` passe.
+> 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
+> 4. ~~Correctif IPv4 producer~~ : `broker.address.family=v4` sur les 3 clients librdkafka, branche `fix/producer-ipv4` (vérifié contre Redpanda prod le 2026-09-26, plus d'erreur IPv6).
+> 5. ~~Déséquilibre des partitions~~ : tranché (D11), messages sans clé, branche `fix/producer-ipv4`.
 
 ---
 
@@ -136,6 +143,8 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D7 | Moteur de la branche B | Bytewax · Quix Streams · Pathway · Arroyo | Quix Streams : Apache-2.0, releases actives, natif Kafka/Redpanda, 100 % Python sans JVM (Bytewax est maintenu par la communauté seulement depuis mai 2025, dernière release en nov. 2024) | **tranché le 2026-09-24 : Quix Streams** |
 | D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (ressource Coolify, compose hors de ce repo), MinIO supprimé le 2026-09-24 |
 | D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
+| D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
+| D11 | Clé des messages `raw_events` | `did` · aucune clé · `seq` · plus de partitions | Aucune clé + sticky partitioner (`sticky.partitioning.linger.ms` = `linger.ms` = 50) : ordre par compte inutile (Silver trie sur `time_us`/`seq`), et la clé `did` biaisait le débit de rattrapage de Spark (une tâche par partition). 3 partitions conservées | **tranché le 2026-09-26** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -166,13 +175,13 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] `producer.py` : client WebSocket **Jetstream v2** (`/xrpc/network.bsky.jetstream.subscribeEvents`), filtres `collections` + `kinds=commit`
 - [x] Reconnexion avec backoff exponentiel + jitter ; reprise au dernier `seq` lu **dans le topic** (pas d'état local), replay plafonné à 60 min
 - [x] Coupure réseau en cours de session testée (règle pare-feu sur tcp/443 pendant 40 s) : détection en 15 s par keepalive (≤ 20 s), reprise au dernier `seq` acquitté, un seul doublon à la borne, 0 perte
-- [x] Clé de message `did`, zstd, `acks=all`, idempotence, horodatage = heure de l'événement
+- [x] Messages sans clé (D11, à l'origine `did`), zstd, `acks=all`, idempotence, horodatage = heure de l'événement
 - [x] Topic `raw_events` créé par le producer : 3 partitions, `retention.ms` = 24 h, `CreateTime`
 - [x] Logs toutes les 30 s : msg/s, KiB/s, lag, dernier `seq` acquitté, erreurs de livraison
 - [x] Tests unitaires : URL, parsing, choix du curseur (dont plafond de rejeu), backoff
 - [x] `docker/producer/Dockerfile` (Python 3.12.14-slim, uv 0.12.18, groupe `producer`, non-root, arrêt propre sur SIGTERM) + `make produce`
 - [x] Volume mesuré (voir journal)
-- [ ] Déployer le producer sur le VPS (service Coolify, `KAFKA_BOOTSTRAP_SERVERS=redpanda:9092`) pour le run de 24 h
+- [x] Déployer le producer sur le VPS (service Coolify, `KAFKA_BOOTSTRAP_SERVERS=redpanda:9092`) pour le run de 24 h (validé le 2026-09-25, voir journal)
 
 **Fini quand :** 24 h d'ingestion sans trou, et un redémarrage du producer ne perd pas d'événements.
 **Piège :** au premier démarrage, le rejeu Jetstream peut inonder Redpanda ; limiter la fenêtre du curseur.
@@ -226,14 +235,17 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 ### Phase 6 — Alternance jour 1 / jour 2
 **Objectif :** faire tourner une seule branche par jour, à tour de rôle (D1).
 
-- [ ] Schedule Dagster de bascule quotidienne à 00:00 UTC : arrêt de la branche sortante, démarrage de la branche entrante
-- [ ] Chaque branche démarre à l'offset de 00:00 (`offsets_for_times`) sur son propre consumer group : aucun trou ni doublon à la bascule
+- [ ] Schedules Dagster (D10, heure de Paris) : **07:00** démarrage de la branche du jour, **19:00** arrêt. Le producer, lui, tourne 24 h/24.
+- [ ] Chaque branche démarre à l'offset de **19:00 la veille** (`offsets_for_times`) sur son propre consumer group et s'arrête à l'offset de **19:00 le jour même** : aucun trou ni doublon entre deux journées
+- [ ] Rattrapage de 07:00 : ~12 h de données (~18,6 M messages à ~430 msg/s). Vérifier qu'il se termine bien avant 19:00 pour les deux branches.
+- [ ] Rétention `raw_events` passée à 36 h (D10)
 - [ ] Table `branch_calendar` (date, branche active, offsets de début et de fin) comme référence du benchmark
-- [ ] Contrôle de complétude : nombre d'événements dans Bronze égal au nombre d'offsets consommés dans Redpanda pour la journée (asset check Dagster)
+- [ ] Contrôle de complétude : nombre d'événements dans Bronze égal au nombre d'offsets consommés dans Redpanda pour la journée 19:00 → 19:00 (asset check Dagster)
 - [ ] Sensors d'échec sur tous les jobs
 
 **Fini quand :** 14 jours d'alternance automatique sans intervention. Avec un cycle de 2 jours sur une semaine de 7, chaque branche passe par les 7 jours de la semaine en 14 jours.
 **Piège :** la journée de bascule mélange deux branches si l'arrêt n'est pas propre. Il faut attendre le dernier commit de la branche sortante avant de figer l'offset de fin.
+**Piège :** 19:00 Europe/Paris change d'heure UTC deux fois par an (heure d'été/hiver) : calculer les bornes dans le fuseau de Paris, puis convertir en UTC.
 
 ### Phase 7 — Observabilité & benchmark
 **Objectif :** des chiffres comparables et défendables.
@@ -253,7 +265,8 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] Table `benchmark_windows` (branche, début de fenêtre, messages, cpu_ms, ram_mb_s, bytes_written, lag, latence p50/p95, mix de collections)
 - [ ] **Buckets de débit** : ranger chaque fenêtre par niveau de trafic (ex. 0–200, 200–500, 500+ msg/s) et comparer A et B bucket par bucket. C'est ce qui rend « à volume équivalent » rigoureux.
 - [ ] **Coût fixe à part** : RAM et CPU du conteneur au repos (JVM, runtime Quix) mesurés séparément et affichés comme une ligne de base
-- [ ] **Test de rattrapage** hebdomadaire : consumer en pause 30 min, puis vitesse de résorption du lag. C'est la seule mesure honnête du débit max ; en temps normal, les deux branches suivent simplement le rythme du flux.
+- [ ] **Test de rattrapage quotidien (D10)** : chaque matin à 07:00, la branche du jour rattrape ~12 h de nuit. Débit de résorption du lag = débit max soutenu (msg/s/vCPU), mesuré chaque jour sans test artificiel.
+- [ ] **Séparer les deux régimes** dans `benchmark_windows` : `catchup` (07:00 → fin du lag) et `live` (temps réel jusqu'à 19:00). Latence et ratios d'efficience du régime live à ne pas mélanger avec le rattrapage.
 - [ ] Limites CPU/RAM Docker identiques pour les deux branches
 - [ ] Comparer aussi à jour de semaine équivalent (lundi A contre lundi B)
 - [ ] Optionnel : les deux branches rejouent le même échantillon d'1 h, pour valider la normalisation et vérifier la parité des tables Gold
@@ -323,3 +336,27 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Prod prête** : `docker-compose.yaml` (producer seul, réseau `coolify`, limite 256 Mo), job `deploy` via Tailscale/OIDC, ignoré tant que les secrets ne sont pas configurés. Mesure : ~37 Mio de RAM, ~11 % d'un CPU en régime normal, ~50 % en rattrapage (~4 900 msg/s). File librdkafka plafonnée à 64 Mo.
 - **Suite** : merge `dev` → `main`, création de la ressource Coolify, secrets CI, puis run de 24 h
 - **`infra/` retiré du repo** (choix de Julien) : les composes Redpanda et Garage partagés vivent dans Coolify. Dernière version versionnée : commit `e4964a6`.
+
+### 2026-09-24 — Fenêtre de fonctionnement (D10)
+- Producer **24 h/24** : quasiment gratuit (~40 Mo, ~8 % CPU), et c'est le seul point de collecte. Une plage horaire sur le producer a été envisagée puis abandonnée.
+- **Branches Spark/Quix de 07:00 à 19:00** (heure de Paris). La journée de benchmark devient **19:00 → 19:00**, sinon les données de 19:00 à minuit ne seraient traitées par aucune branche.
+- Effet de bord utile : le rattrapage de ~12 h chaque matin sert de **test de débit max quotidien**. Il faudra séparer métriques de rattrapage et de temps réel.
+- Rétention à monter à 36 h en phase 6 pour garder de la marge.
+
+### 2026-09-24 — Producer en prod
+- Déployé sur le VPS (Coolify, réseau `coolify`, `redpanda:9092`) le 2026-09-24 à 16:21 UTC. ~405 msg/s, lag 0,1 s, 40 Mio de RAM, ~8 % de CPU, 0 erreur de livraison. CI `main` verte, déploiement auto en attente des secrets.
+- Taille réelle en prod : **~192 B/msg**, soit ~280 Mo/h et un plateau attendu à ~6,7 Go avec 24 h de rétention (~10 Go à 36 h). 214 Go libres sur le VPS.
+- `__consumer_offsets` créé automatiquement (consumer de reprise du producer) : topic système, ne pas toucher.
+- `dev`/`main` : 2 commits de la phase 1 poussés après le merge de la PR #2, rattrapés par des merges git (`f4e0773`, `dffc58c`). Règle : pousser tout **avant** de merger.
+
+### 2026-09-25 — Contrôle du run de 24 h
+- **Producer** : 30 h de run, **0 redémarrage**, 0 OOM, 68 Mio / 256 Mio, ~5 % de CPU, 0 erreur de livraison, lag 0,1 s.
+- **Topic `raw_events`** : **6,6 Go**, plateau atteint, la rétention de 24 h purge bien. Disque du VPS : 208 Go libres.
+- **Partitions sur 24 h** : 14,0 M / 10,7 M / 10,0 M messages (×1,4), moins déséquilibrées que la mesure à chaud (×2,5). Le sujet reste ouvert avant la phase 2.
+- **Incident Jetstream** le 2026-09-25 à 17:12 UTC (`502 upstream unavailable` côté serveur, reprise à 17:14 par le backoff), puis 5 coupures « keepalive ping timeout » jusqu'à 19:09, toutes reprises en moins de 2 s.
+- **Audit `seq`** (scan en lecture seule de tout le topic, bitmap, fenêtre commune aux 3 partitions) : 34,9 M messages, **7 doublons pour 7 reprises**, soit exactement le `seq` inclusif de chaque borne : **aucune perte côté producer**.
+- **Le `seq` n'est pas dense** dans le flux filtré : ~3,5 % de trous, dont 99 % de 1 à 3 numéros. Ils sont répartis uniformément, donc structurels : Jetstream numérote aussi les événements qu'il filtre. On ne peut pas vérifier la complétude par la contiguïté du `seq` ; en aval, dédoublonner sur `seq` suffit.
+- **Quelques gros trous** (21 k et 10 k numéros vers le `seq` 26 300,2 M, soit environ 02:40 UTC le 25/09) ne tombent sur **aucune reconnexion** du producer : probablement des pertes côté Jetstream. À dater précisément si on veut le documenter.
+- Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
+- **Correctif IPv4** (`fix/producer-ipv4`) : `kafka_base_config()` partagé par AdminClient, Consumer et Producer, avec `broker.address.family=v4`. Testé depuis un conteneur jetable sur le réseau `coolify` : plus d'erreur `Connect to ipv6#…`.
+- **D11 tranché : messages sans clé.** La clé `did` donnait ×1,4 sur une partition (quelques DID très actifs), ce qui aurait ralenti le rattrapage de Spark sur une seule tâche. Test local sur 91 k messages : 30,7 k / 30,6 k / 29,9 k. Commit `feat(producer)` sur `fix/producer-ipv4` ; en prod au prochain déploiement.
