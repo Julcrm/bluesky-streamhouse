@@ -32,6 +32,9 @@ JETSTREAM_MAX_REPLAY_MINUTES = int(os.getenv("JETSTREAM_MAX_REPLAY_MINUTES", "60
 # --- Redpanda (Kafka API) ---
 # 127.0.0.1 rather than localhost: avoids librdkafka trying IPv6 (::1) first
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:19092")
+# Shared by every librdkafka client (producer, Quix): Redpanda only listens on IPv4,
+# but `redpanda` (coolify network) and `localhost` also resolve to IPv6
+KAFKA_CLIENT_CONFIG = {"broker.address.family": "v4"}
 
 PRODUCER_STATS_INTERVAL_SECONDS = 30
 
@@ -42,6 +45,14 @@ RAW_EVENTS_RETENTION_MS = 24 * 60 * 60 * 1000
 
 # Branch B consumer group (branch A tracks offsets in its Spark checkpoint)
 QUIX_CONSUMER_GROUP = "branch-b-quix"
+# One checkpoint = one DuckLake commit, same cadence as Spark's 5 s trigger
+QUIX_COMMIT_INTERVAL_SECONDS = 5.0
+# Also commit after this many messages: bounds batch size and memory during catch-up.
+# Branch A must use the same cap (Spark maxOffsetsPerTrigger) to keep commit parity
+QUIX_COMMIT_EVERY = 50_000
+# Without committed offsets, start from the oldest retained event (no silent skip).
+# Phase 6 replaces this with explicit 19:00 → 19:00 offsets (D10)
+QUIX_AUTO_OFFSET_RESET = os.getenv("QUIX_AUTO_OFFSET_RESET", "earliest")
 
 # --- Garage / S3 ---
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://localhost:3900")

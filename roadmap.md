@@ -146,6 +146,7 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
 | D11 | Clé des messages `raw_events` | `did` · aucune clé · `seq` · plus de partitions | Aucune clé + sticky partitioner (`sticky.partitioning.linger.ms` = `linger.ms` = 50) : ordre par compte inutile (Silver trie sur `time_us`/`seq`), et la clé `did` biaisait le débit de rattrapage de Spark (une tâche par partition). 3 partitions conservées | **tranché le 2026-09-26** |
 | D12 | Catalogue DuckLake en prod | Base dans le Postgres partagé (`v8kok…`) · conteneur Postgres dédié | Conteneur dédié recommandé (coût du catalogue attribuable à la branche B) | **tranché le 2026-09-26 : Postgres partagé**, base dédiée `ducklake_catalog`, superuser `postgres` (pas de rôle dédié, choix de Julien). Instance peu chargée (n8n retiré, bot quasi inactif). Limite acceptée : le CPU/RAM du catalogue n'est pas isolé par conteneur, à estimer via `pg_stat_database` sur la base DuckLake (phase 7) |
+| D13 | Contrat Bronze (commun aux deux branches) | Enveloppe typée + `record` JSON · message brut seul · une table par collection | Table unique `bronze_events` : `seq, did, collection, operation, rkey, rev, cid, event_time, record` (JSON), `kafka_partition, kafka_offset, processed_at`. **Append-only**, dédoublonnage en Silver sur `seq`. **1 commit par checkpoint** (toutes partitions dans un INSERT), plafonné à 50 000 messages en rattrapage (`commit_every`, même plafond côté Spark via `maxOffsetsPerTrigger`) | **tranché le 2026-09-26**, défini dans `src/processing/bronze.py` |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -192,11 +193,12 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 
 - [x] Prod (D12) : base `ducklake_catalog` (propriétaire `postgres`, choix de Julien) sur le Postgres partagé `v8kok…`, bucket Garage `bluesky-streamhouse` + clé `bluesky` (RWO sur ce bucket seul, `datagrip` en RWO aussi) — 2026-09-26
 - [x] `resources/ducklake.py` : `connect()` sans dépendance Dagster, secrets DuckDB (S3 + Postgres **par défaut, sans nom** : DuckLake ignore les secrets Postgres nommés), `ATTACH 'ducklake:postgres:'` avec `DATA_PATH` sur Garage, `DATA_INLINING_ROW_LIMIT` (non persisté, repassé à chaque ATTACH) et `READ_ONLY` en option
-- [ ] Application Quix Streams : topic `raw_events` → parsing (StreamingDataFrame) → `BatchingSink` custom vers DuckLake (taille et délai de batch)
+- [x] Application Quix Streams : `raw_events` → `parse_bronze_event` → `DuckLakeBronzeSink` (`flush()` surchargé : un INSERT Arrow par checkpoint de 5 s, plafond 50 000 messages ; `SinkBackpressureError` si Garage ou Postgres tombe)
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
-- [ ] Idempotence : commit des offsets après écriture du batch (at-least-once) et dédoublonnage sur la clé naturelle `(did, collection, rkey, time_us)`
+- [x] At-least-once : Quix commite les offsets après le flush du sink. Bronze append-only, dédoublonnage en Silver sur `seq` (D13 ; `time_us` n'existe plus en Jetstream v2)
+- [ ] Stack locale : rattrapage validé (voir journal) ; reste un test de redémarrage en cours de flux
 - [ ] `docker/quix/Dockerfile` (extensions DuckDB `ducklake`, `postgres`, `httpfs` installées au build, pas au runtime)
-- [ ] Tests unitaires des étapes de transformation (sans Kafka)
+- [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
 
@@ -371,3 +373,8 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **D12 tranché : catalogue DuckLake dans le Postgres partagé**, base `ducklake_catalog` avec le superuser `postgres`. Base `n8n` supprimée (plus en prod, aucune connexion ni conteneur).
 - **Garage** : bucket `bluesky-streamhouse`, clé `bluesky` (`GK833d…`) en RWO sur ce bucket uniquement, `datagrip` en RWO aussi. Le bucket `etl` n'existe plus.
 - **`resources/ducklake.py`** : DuckLake format 1.0 (DuckDB 1.5.5). `DATA_PATH` est enregistré dans le catalogue au premier ATTACH ; la limite d'inlining ne l'est pas. Limite par défaut : **10 lignes** (au-delà, un INSERT écrit directement un Parquet) : avec des batchs Quix de plusieurs milliers de lignes, l'inlining ne jouera que si on la relève (expérience du point 3). Test d'intégration sur la stack locale, ignoré en CI.
+- **D13 tranché : contrat Bronze** (`src/processing/bronze.py`), table unique, append-only, 1 commit par checkpoint.
+- **App Quix en local** : 1er essai avec des paramètres liste + `unnest` : **~410 lignes/s** (conversion Python valeur par valeur), un checkpoint de 123 k lignes a mis 205 s. Passage à **pyarrow** (groupe `quix`) : **~190 000 lignes/s** sur la même DuckLake.
+- **Rattrapage local** : 1,26 M messages rattrapés en ~60 s (commits de 50 000 lignes en ~350 ms), puis régime live à ~1 800 lignes par checkpoint de 5 s (70-100 ms par INSERT). Contrôle Bronze : **0 offset manquant, 0 offset en double** sur les 3 partitions, du début du topic à l'offset commité.
+- Quix crée un dossier `state/` même sans opérateur à état : ignoré par git. `make quix` ajouté.
+- Le réglage IPv4 de librdkafka est passé dans `config.KAFKA_CLIENT_CONFIG`, partagé par le producer et Quix (l'image Quix n'a pas `websockets`, elle ne peut pas importer le producer).
