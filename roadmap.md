@@ -196,7 +196,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Application Quix Streams : `raw_events` → `parse_bronze_event` → `DuckLakeBronzeSink` (`flush()` surchargé : un INSERT Arrow par checkpoint de 5 s, plafond 50 000 messages ; `SinkBackpressureError` si Garage ou Postgres tombe)
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
 - [x] At-least-once : Quix commite les offsets après le flush du sink. Bronze append-only, dédoublonnage en Silver sur `seq` (D13 ; `time_us` n'existe plus en Jetstream v2)
-- [ ] Stack locale : rattrapage validé (voir journal) ; reste un test de redémarrage en cours de flux
+- [x] Stack locale : rattrapage et redémarrages en plein flux (SIGTERM et SIGKILL) validés, 0 offset manquant ou en double (voir journal)
 - [ ] `docker/quix/Dockerfile` (extensions DuckDB `ducklake`, `postgres`, `httpfs` installées au build, pas au runtime)
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
@@ -378,3 +378,5 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Rattrapage local** : 1,26 M messages rattrapés en ~60 s (commits de 50 000 lignes en ~350 ms), puis régime live à ~1 800 lignes par checkpoint de 5 s (70-100 ms par INSERT). Contrôle Bronze : **0 offset manquant, 0 offset en double** sur les 3 partitions, du début du topic à l'offset commité.
 - Quix crée un dossier `state/` même sans opérateur à état : ignoré par git. `make quix` ajouté.
 - Le réglage IPv4 de librdkafka est passé dans `config.KAFKA_CLIENT_CONFIG`, partagé par le producer et Quix (l'image Quix n'a pas `websockets`, elle ne peut pas importer le producer).
+- **Test de redémarrage** (producer actif en continu) : SIGTERM → dernier flush puis sortie propre ; SIGKILL au milieu d'un checkpoint → reprise au dernier offset commité. Bronze : +485 k lignes, **0 offset manquant, 0 en double** ; snapshots +17 pour 17 commits. Un doublon n'est possible que si le crash tombe entre l'INSERT et le commit des offsets (fenêtre de quelques ms), Silver le retire.
+- Après un SIGKILL, la nouvelle instance attend **~32 s** son premier commit (vs 7 s après un SIGTERM) : Redpanda attend l'expiration de la session de l'instance morte (`session.timeout.ms`, 45 s par défaut). Option : le descendre à ~10 s, à trancher.
