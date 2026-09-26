@@ -12,7 +12,9 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    # No download cache in the image (~300 MB for the quix group)
+    UV_NO_CACHE=1
 
 # Dependency layer, cached separately from the source code
 COPY pyproject.toml uv.lock ./

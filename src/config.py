@@ -50,6 +50,9 @@ QUIX_COMMIT_INTERVAL_SECONDS = 5.0
 # Also commit after this many messages: bounds batch size and memory during catch-up.
 # Branch A must use the same cap (Spark maxOffsetsPerTrigger) to keep commit parity
 QUIX_COMMIT_EVERY = 50_000
+# A crashed instance keeps its partitions until its session expires (45 s by default):
+# 10 s shortens recovery after a kill. Heartbeats (3 s default) must stay below a third
+QUIX_SESSION_TIMEOUT_MS = 10_000
 # Without committed offsets, start from the oldest retained event (no silent skip).
 # Phase 6 replaces this with explicit 19:00 → 19:00 offsets (D10)
 QUIX_AUTO_OFFSET_RESET = os.getenv("QUIX_AUTO_OFFSET_RESET", "earliest")

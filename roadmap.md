@@ -197,7 +197,8 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
 - [x] At-least-once : Quix commite les offsets après le flush du sink. Bronze append-only, dédoublonnage en Silver sur `seq` (D13 ; `time_us` n'existe plus en Jetstream v2)
 - [x] Stack locale : rattrapage et redémarrages en plein flux (SIGTERM et SIGKILL) validés, 0 offset manquant ou en double (voir journal)
-- [ ] `docker/quix/Dockerfile` (extensions DuckDB `ducklake`, `postgres`, `httpfs` installées au build, pas au runtime)
+- [x] `docker/quix/Dockerfile` (extensions DuckDB installées au build, chargées sans réseau ; image 208 Mo compressée) + service `quix` dans `docker-compose.yaml` (limite 768 Mo)
+- [ ] **Avant de merger sur `main`** : décider de la rétention Bronze sur Garage (~230 B/ligne, soit ~6,9 Go/jour pour la branche B seule, disque plein en ~30 jours) et des variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`)
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
@@ -380,3 +381,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - Le réglage IPv4 de librdkafka est passé dans `config.KAFKA_CLIENT_CONFIG`, partagé par le producer et Quix (l'image Quix n'a pas `websockets`, elle ne peut pas importer le producer).
 - **Test de redémarrage** (producer actif en continu) : SIGTERM → dernier flush puis sortie propre ; SIGKILL au milieu d'un checkpoint → reprise au dernier offset commité. Bronze : +485 k lignes, **0 offset manquant, 0 en double** ; snapshots +17 pour 17 commits. Un doublon n'est possible que si le crash tombe entre l'INSERT et le commit des offsets (fenêtre de quelques ms), Silver le retire.
 - Après un SIGKILL, la nouvelle instance attend **~32 s** son premier commit (vs 7 s après un SIGTERM) : Redpanda attend l'expiration de la session de l'instance morte (`session.timeout.ms`, 45 s par défaut). Option : le descendre à ~10 s, à trancher.
+- **`session.timeout.ms` à 10 s** pour Quix (au lieu de 45 s) : reprise plus rapide après un crash.
+- **Dockerfile Quix** : extensions DuckDB installées au build dans `~/.duckdb` (chargement vérifié avec `--network none`), dossier `state/` créé pour `appuser`. Testé sur le réseau de la stack locale avec les hôtes de prod : rattrapage puis live, `docker stop` propre en 2 s, **~280 Mio de RAM** après un lot de 50 000 lignes.
+- **Cache uv dans les images** : la couche `uv sync` embarquait ~300 Mo de cache. `UV_NO_CACHE=1` dans les deux Dockerfiles : image Quix 304 → 208 Mo compressée, producer 71 Mo.
+- **Volume Bronze** : 230 B/ligne en Parquet zstd (fichiers de 7,4 Mo en moyenne en local), soit **~6,9 Go/jour** pour la branche B. Rétention à trancher avant le déploiement 24 h/24.

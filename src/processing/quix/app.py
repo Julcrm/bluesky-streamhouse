@@ -150,7 +150,10 @@ def build_app() -> Application:
         auto_offset_reset=config.QUIX_AUTO_OFFSET_RESET,
         commit_interval=config.QUIX_COMMIT_INTERVAL_SECONDS,
         commit_every=config.QUIX_COMMIT_EVERY,
-        consumer_extra_config=config.KAFKA_CLIENT_CONFIG,
+        consumer_extra_config={
+            **config.KAFKA_CLIENT_CONFIG,
+            "session.timeout.ms": config.QUIX_SESSION_TIMEOUT_MS,
+        },
         producer_extra_config=config.KAFKA_CLIENT_CONFIG,
         # raw_events is created and configured by the producer
         auto_create_topics=False,

@@ -2,9 +2,10 @@
 # Bluesky Streamhouse — Docker Compose (production, Coolify)
 # Services:
 #   - producer: Jetstream v2 -> Redpanda `raw_events` (no exposed port)
+#   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
-# Services of later phases (Quix, Spark, Dagster code server, API) are added here.
+# Services of later phases (Spark, Dagster code server, API) are added here.
 # Network: coolify (external)
 # =============================================================================
 
@@ -24,6 +25,38 @@ services:
       resources:
         limits:
           memory: 256M  # measured ~37 MiB steady, <110 MiB with a full send queue
+    networks:
+      - coolify
+    restart: always
+
+  # Branch B: raw_events -> DuckLake Bronze (Postgres catalog, Parquet on Garage)
+  quix:
+    build:
+      context: .
+      dockerfile: docker/quix/Dockerfile
+    container_name: bsh-quix
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - QUIX_AUTO_OFFSET_RESET=${QUIX_AUTO_OFFSET_RESET:-earliest}
+      # DuckLake catalog on the shared Postgres (decision D12)
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DUCKLAKE_CATALOG_DB=${DUCKLAKE_CATALOG_DB:-ducklake_catalog}
+      - DUCKLAKE_DATA_INLINING_ROW_LIMIT=${DUCKLAKE_DATA_INLINING_ROW_LIMIT:-10}
+      # Garage, key `bluesky` (RWO on this bucket only)
+      - S3_ENDPOINT_URL=http://garage:3900
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+      - BUCKET=${BUCKET:-bluesky-streamhouse}
+    # Leaves time for the last checkpoint flush and offset commit on SIGTERM
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 768M  # measured ~280 MiB after a 50k-row catch-up batch
     networks:
       - coolify
     restart: always
