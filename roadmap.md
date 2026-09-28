@@ -3,27 +3,28 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en prod depuis le 2026-09-28, audit des offsets OK, bilan de 24 h à faire · phase 3 cadrée (D16 à D21)
-**Dernière mise à jour :** 2026-09-28
+**Phase en cours :** 2 (bilan de 24 h à faire) et 3 en parallèle : 3a Silver et 3b Gold faits en local (65 tests dbt), D15 révisé (inlining désactivé), reste 3c Dagster et 3d maintenance
+**Dernière mise à jour :** 2026-09-28 (fin de session)
 
 > **Prochaine session : commencer ici**
-> 1. ~~**Audit des offsets en prod**~~ : fait le 2026-09-28 à 11:29 UTC, 0 manquant / 0 doublon (voir journal). Requête (ajouter `SET memory_limit='150MB'; SET temp_directory='/tmp/duckdb_audit'`, et caster les timestamps en `VARCHAR` : pas de `pytz` dans l'image) :
+> 1. **Bilan sur 24 h de la prod** (à partir du 2026-09-29 ~10:00 UTC, Quix démarré à 09:56 le 28) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation disque de ~60-65 Go). C'est le **dernier bilan avec inlining** : la prod tourne encore l'ancien D15. Requête d'audit des offsets (lecture seule) :
 >    ```bash
 >    Q=$(docker ps -q --filter name=quix)
 >    docker exec $Q /app/.venv/bin/python -c "
 >    from src.resources.ducklake import connect
 >    c = connect(read_only=True)
+>    c.execute(\"SET memory_limit='150MB'; SET temp_directory='/tmp/duckdb_audit'\")
 >    print(c.execute('''SELECT kafka_partition, count(*) AS rows_,
 >      count(*) - count(DISTINCT kafka_offset) AS dup,
 >      max(kafka_offset) - min(kafka_offset) + 1 - count(DISTINCT kafka_offset) AS missing
 >      FROM lake.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
 >    ```
->    Attendu : `missing = 0` sur les 3 partitions (quelques `dup` tolérés, retirés en Silver).
-> 2. **Bilan sur 24 h** (pas avant le 2026-09-29 ~10:00 UTC, déploiement du correctif à 09:56) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
-> 3. Si tout est bon : **clore la phase 2** (merge `feat/phase-2-quix-ducklake` → `dev` → `main`), puis phase 3 : brainstorm terminé (D16 à D21, checklist de la phase 3 à jour). Ordre : **test local préalable** (branche jetable, résultats au journal ; si D16 casse, retour au repère `processed_at`) → 3a Silver → 3b Gold → 3c Dagster (+ ligne dans `workspace.yaml` du `dagster-workspace`) → 3d maintenance. Une PR par étape, vers `dev`.
-> 4. Pousser les commits de doc restés en local sur `feat/phase-2-quix-ducklake`.
+>    Attendu : `missing = 0` sur les 3 partitions. Caster les timestamps en `VARCHAR` (pas de `pytz` dans l'image).
+> 2. **Git** : vérifier que `feat/phase-3b-gold` est poussée (commits `2893d0e` Gold et `1f2cf37` D15 révisé), PR → `dev`, puis **`dev` → `main`** juste après le bilan : clôt la phase 2 et déploie les correctifs Quix (erreurs internes DuckLake, `TransactionException`, Parquet direct). Vérifier après déploiement : plus de ligne `Inlined flush`, commits Quix en ~50 ms.
+> 3. **3c Dagster** : code location `bluesky_duckdb` (D20) dans le `dagster-workspace` partagé, `dagster-dbt`, job de 15 min Silver → Gold **relancé en boucle tant que Silver a du retard** (plafond de 500 k lignes Bronze par run), `RetryPolicy`, image Docker avec le manifest dbt compilé. Mesurer en prod la latence de Quix pendant les runs dbt.
+> 4. **3d maintenance** : `DELETE` de rétention + `CHECKPOINT` (D21), garde-fou D16, alertes 80 Go / catalogue 2 Go.
 >
-> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). Entre 08:53 et 09:55 UTC le 2026-09-28, la prod a tourné sans inlining : petits fichiers dans Bronze, repris par la fusion de fichiers de la phase 3.
+> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). En local : `make up`, puis `make dbt-build` ; la base `ducklake_spike` et le dossier `spike/` du Garage local servent aux expériences (à supprimer après la 3d). Issue DuckLake publiée (bug de scan des données inlinées).
 ---
 
 ## Architecture cible
