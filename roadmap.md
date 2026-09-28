@@ -3,13 +3,27 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en contrôle de prod
+**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en prod depuis le 2026-09-28, audit des offsets OK, bilan de 24 h à faire · phase 3 cadrée (D16 à D21)
 **Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Contrôle de la prod** (Quix redéployé le 2026-09-28 avec la limite d'inlining lue dans `config.py`) : conteneur `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `docker ps --filter name=quix`) sans redémarrage, RAM (limite 768 Mo), logs `Bronze commit` (latence des INSERT inlinés) et `Inlined flush` (toutes les 5 min), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, taille de la base `ducklake_catalog`, **B/ligne sur 24 h** (valide ou corrige D14).
-> 2. Entre 08:53 et 09:42 UTC, la prod a tourné **sans inlining** (PR #7 mergée dans `main` avant le commit D15) : quelques centaines de petits fichiers dans Bronze, sans conséquence, repris par la fusion de fichiers de la phase 3.
-> 3. Si le contrôle est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb + Dagster).
+> 1. ~~**Audit des offsets en prod**~~ : fait le 2026-09-28 à 11:29 UTC, 0 manquant / 0 doublon (voir journal). Requête (ajouter `SET memory_limit='150MB'; SET temp_directory='/tmp/duckdb_audit'`, et caster les timestamps en `VARCHAR` : pas de `pytz` dans l'image) :
+>    ```bash
+>    Q=$(docker ps -q --filter name=quix)
+>    docker exec $Q /app/.venv/bin/python -c "
+>    from src.resources.ducklake import connect
+>    c = connect(read_only=True)
+>    print(c.execute('''SELECT kafka_partition, count(*) AS rows_,
+>      count(*) - count(DISTINCT kafka_offset) AS dup,
+>      max(kafka_offset) - min(kafka_offset) + 1 - count(DISTINCT kafka_offset) AS missing
+>      FROM lake.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
+>    ```
+>    Attendu : `missing = 0` sur les 3 partitions (quelques `dup` tolérés, retirés en Silver).
+> 2. **Bilan sur 24 h** (pas avant le 2026-09-29 ~10:00 UTC, déploiement du correctif à 09:56) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
+> 3. Si tout est bon : **clore la phase 2** (merge `feat/phase-2-quix-ducklake` → `dev` → `main`), puis phase 3 : brainstorm terminé (D16 à D21, checklist de la phase 3 à jour). Ordre : **test local préalable** (branche jetable, résultats au journal ; si D16 casse, retour au repère `processed_at`) → 3a Silver → 3b Gold → 3c Dagster (+ ligne dans `workspace.yaml` du `dagster-workspace`) → 3d maintenance. Une PR par étape, vers `dev`.
+> 4. Pousser les commits de doc restés en local sur `feat/phase-2-quix-ducklake`.
+>
+> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). Entre 08:53 et 09:55 UTC le 2026-09-28, la prod a tourné sans inlining : petits fichiers dans Bronze, repris par la fusion de fichiers de la phase 3.
 ---
 
 ## Architecture cible
@@ -36,6 +50,20 @@ dbt-spark                              dbt-duckdb
 
 **Question posée par le projet :** pour le même flux temps réel, que coûte (CPU, RAM, stockage, latence,
 complexité opérationnelle) une stack JVM « enterprise » face à une stack zero-JVM moderne ?
+
+---
+
+## Règle du benchmark : parité du contrat, pas des mécanismes
+
+**Parité obligatoire sur le contrat**, sinon la comparaison n'est pas honnête :
+- mêmes entrées (topic `raw_events`, même journée 19:00 → 19:00) ;
+- mêmes sorties : tables Silver/Gold aux mêmes noms, mêmes colonnes, **même sens des métriques** (une métrique exacte l'est dans les deux branches) ;
+- mêmes tests dbt, mêmes garanties (0 perte, doublons retirés en Silver) ;
+- mêmes limites CPU/RAM Docker et même fraîcheur des données.
+
+**Liberté totale sur les mécanismes** : chaque stack est configurée **à son meilleur** et utilise ses fonctions natives, même si l'autre stack n'a pas d'équivalent (ex. : data inlining DuckLake D15, flux de changements DuckLake D16). On ne bride jamais une techno pour copier l'autre : l'écart est **un résultat du benchmark**, pas un biais à corriger. La règle vaut dans les deux sens (Spark/Iceberg auront droit à leurs propres atouts en phases 4-5).
+
+**Contrepartie** : le coût de chaque avantage (code sur mesure, pièges, maintenance, coût caché comme Postgres pour l'inlining) est mesuré ou noté, car la complexité opérationnelle fait partie de la question du projet.
 
 ---
 
@@ -104,6 +132,10 @@ tests/                         # Un fichier de test par module
 - [ ] Tests pour chaque module, dont `maintenance/`, et `dbt parse` en CI.
 - [ ] Git : commits conventionnels, une branche par phase, PR vers `dev` puis `main`.
 
+À reporter dans velib (améliorations trouvées sur ce projet) :
+- [ ] **Dagster** : remplacer les assets qui lancent `uv run dbt` en sous-processus (chemin absolu `/opt/dagster/app/dbt`, Silver/Gold en boîte noire) par `dagster-dbt` (`@dbt_assets`) : un asset par modèle, tests dbt en asset checks, durée par modèle, projet trouvé par `Path(__file__)`, manifest compilé au build (D20).
+- [ ] Vérifier la limite mémoire du conteneur code server velib : avec le `DefaultRunLauncher`, les runs dbt tournent dedans.
+
 ---
 
 ## Versions épinglées (vérifiées le 2026-09-24)
@@ -145,7 +177,13 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D12 | Catalogue DuckLake en prod | Base dans le Postgres partagé (`v8kok…`) · conteneur Postgres dédié | Conteneur dédié recommandé (coût du catalogue attribuable à la branche B) | **tranché le 2026-09-26 : Postgres partagé**, base dédiée `ducklake_catalog`, superuser `postgres` (pas de rôle dédié, choix de Julien). Instance peu chargée (n8n retiré, bot quasi inactif). Limite acceptée : le CPU/RAM du catalogue n'est pas isolé par conteneur, à estimer via `pg_stat_database` sur la base DuckLake (phase 7) |
 | D13 | Contrat Bronze (commun aux deux branches) | Enveloppe typée + `record` JSON · message brut seul · une table par collection | Table unique `bronze_events` : `seq, did, collection, operation, rkey, rev, cid, event_time, record` (JSON), `kafka_partition, kafka_offset, processed_at`. **Append-only**, dédoublonnage en Silver sur `seq`. **1 commit par checkpoint** (toutes partitions dans un INSERT), plafonné à 50 000 messages en rattrapage (`commit_every`, même plafond côté Spark via `maxOffsetsPerTrigger`) | **tranché le 2026-09-26**, défini dans `src/processing/bronze.py` |
 | D14 | Rétention et volumétrie | Tout garder · N jours par couche · alternance seule | Budget disque **≤ 100 Go** (autres projets sur le VPS). **Bronze 7 j, Silver 7 j, Gold 30 j**, benchmark (`benchmark_windows`, `branch_calendar`) conservé, Redpanda **24 h**. Parquet en **zstd** (DuckLake écrit en Snappy par défaut : 213 → 121 B/ligne), Bronze et Silver **découpés par jour** (sinon un DELETE n'efface aucun fichier). Nettoyage quotidien à **2 h** (hors 07:00-19:00) : DELETE → `expire_snapshots` → `cleanup_old_files` (jamais de `rm` direct sur Garage, contrairement à velib). **Asset check Dagster : alerte mail à 80 Go** sur le bucket. Estimation en régime stable : **~55 Go** (≤ 70 Go avec 30 % de marge) | **tranché le 2026-09-26** |
-| D15 | Data inlining DuckLake (branche B) | Limite 10 (défaut, petits fichiers + fusion a posteriori, comme Iceberg) · limite ~10 000 + flush | **Chaque stack configurée à son meilleur** : l'inlining est la réponse de DuckLake au streaming, on ne le bride pas pour copier Iceberg. Limite **10 000** (au-dessus d'un checkpoint live ~2-3 k lignes, sous un lot de rattrapage de 50 k : le rattrapage écrit du Parquet direct). **Flush dans le sink** toutes les **5 min** (pas de conflit d'écriture avec Quix, coût compté dans le conteneur B), + flush au démarrage. Condition : mesurer le coût côté Postgres (base `ducklake_catalog`) en phase 7, sinon B paraît artificiellement légère | **tranché le 2026-09-28** |
+| D15 | Data inlining DuckLake (branche B) | Limite 10 (défaut, petits fichiers + fusion a posteriori, comme Iceberg) · limite ~10 000 + flush | **Chaque stack configurée à son meilleur** : l'inlining est la réponse de DuckLake au streaming, on ne le bride pas pour copier Iceberg. Limite **10 000** (au-dessus d'un checkpoint live ~2-3 k lignes, sous un lot de rattrapage de 50 k : le rattrapage écrit du Parquet direct). **Flush dans le sink** toutes les **5 min** (pas de conflit d'écriture avec Quix, coût compté dans le conteneur B), + flush au démarrage. Condition : mesurer le coût côté Postgres (base `ducklake_catalog`) en phase 7, sinon B paraît artificiellement légère. Flush du sink conservé en phase 3 (révision vers Dagster envisagée puis abandonnée le 2026-09-28, voir journal) | **tranché le 2026-09-28** |
+| D16 | Silver incrémental (branche B) | (a) repère sur `processed_at` + recouvrement · (b) flux de changements DuckLake (`ducklake_table_changes` / `ducklake_table_insertions`) entre le dernier snapshot traité et le snapshot courant · (c) `delete+insert` du jour | **(b)**, fonction native de DuckLake (règle « parité du contrat, pas des mécanismes ») : exact, sans recouvrement, lit seulement les fichiers et lignes inlinées ajoutés. Dédoublonnage sur `seq` contre le Silver récent conservé (un rejeu après crash arrive dans un snapshot plus récent). Dernier snapshot traité stocké côté Silver ; asset check : `expire_snapshots` ne doit jamais dépasser ce snapshot. **Sous réserve d'un test local** (lignes inlinées vues une seule fois malgré le flush, comportement après `merge_adjacent_files`, macro dbt) ; si ça casse, retour à (a) avec la raison au journal | **tranché le 2026-09-28** |
+| D17 | Utilisateurs distincts en Gold | `count(DISTINCT)` exact · HyperLogLog natif avec tolérance ±2 % | **Exact** : c'est le contrat de la métrique (pas un mécanisme), identique dans les deux branches ; chaque stack le calcule comme elle veut. Coût faible au grain horaire | **tranché le 2026-09-28** |
+| D18 | Suppressions (`delete`) en Silver | (a) journal d'événements append-only · (b) état courant (MERGE/DELETE) · (c) état + `deleted_at` | **(a)**, question de contrat : avec 7 j de rétention, la cible d'un `delete` est souvent déjà hors de Silver, donc un « état courant » serait faux par construction ; Gold produit des métriques de flux. Les `create` vont dans `silver_posts/likes/reposts/follows`, les `delete` dans **`silver_deletes`** (`collection, did, rkey, event_time`, pas de `record`) pour éviter des colonnes NULL | **tranché le 2026-09-28** |
+| D19 | Modèles Silver / Gold | — | **Temps de référence = `event_time`** (réception Jetstream ; `created_at` client gardé pour info seulement). Silver : colonnes communes `seq, did, rkey, cid, event_time, created_at, processed_at` + snapshot Bronze ; `silver_posts` (`text`, `langs`, `reply_parent_uri`, `reply_root_uri`, `embed_type`, `hashtags` en liste minuscule = facets `#tag` + `tags`, `mention_dids`), `silver_likes` / `silver_reposts` (`subject_uri`, `subject_did`, `subject_rkey`), `silver_follows` (`subject_did`), `silver_deletes`. Gold (UTC, 30 j) : `gold_activity_minute` (creates/deletes par collection), `gold_langs_hour`, `gold_hashtags_hour` (**top 50/heure avec `rank`** : classement en Gold, pas dans l'API), `gold_active_users_hour` (D17), `gold_engagement_hour` (likes, reposts, réponses, suppressions, likes nets ; **pas de top posts**). **Gold incrémental par heures touchées** : le flux de changements de Silver (D16) donne les heures à recalculer (`delete+insert`), ce qui absorbe les données en retard (rattrapage de 07:00) | **tranché le 2026-09-28** |
+| D20 | Orchestration Dagster | Une code location pour tout · une par branche ; dbt en sous-processus (velib) · `dagster-dbt` | **Une code location par branche** (`bluesky_duckdb` en phase 3, `bluesky_spark` en phase 5) dans le `dagster-workspace` partagé : pas de JVM dans l'image B (zero-JVM honnête), coûts dbt attribuables par conteneur (`DefaultRunLauncher` : les runs tournent dans le conteneur du code server). **`dagster-dbt` (`@dbt_assets`)** : un asset par modèle, tests en asset checks, durée par modèle (mesure de benchmark), manifest compilé au build, projet trouvé par `Path(__file__)`. **Silver → Gold toutes les 15 min** (fraîcheur = contrat, identique pour A), un seul run à la fois. Conteneur limité à **1,5 Go**, DuckDB `memory_limit = 1GB` et `temp_directory` dans `/tmp` (dans `config.py`, pas en `${VAR:-défaut}`). **Purge des runs Dagster de plus de 30 j** dans la maintenance | **tranché le 2026-09-28** |
+| D21 | Maintenance DuckLake (quotidienne, 2 h Europe/Paris) | Étapes explicites (`merge_adjacent_files`, `expire_snapshots`, `cleanup_old_files`…) · `CHECKPOINT` natif | **`DELETE` de rétention explicite (D14 : Bronze/Silver 7 j, Gold 30 j), puis `CHECKPOINT` natif** (règle du benchmark : une commande au lieu des 3-4 procédures d'Iceberg, résultat « complexité »). Options persistées par `set_option`, valeurs dans `config.py` : **time travel 24 h** (`expire_older_than`), **1 h** avant suppression des fichiers, `target_file_size`. Métadonnées Dagster : durée + différences avant/après lues dans le catalogue (fichiers actifs, octets, snapshots, fichiers en attente) ; pas de détail par étape, accepté. **Garde-fou D16 avant le `CHECKPOINT`** : dernier snapshot traité par Silver de moins de 24 h, sinon maintenance annulée + alerte. Conflit avec Quix (24 h/24 jusqu'en phase 6) : `CHECKPOINT` relancé 3 fois avec backoff. **Asset checks** : taille du bucket < **80 Go** par **listing S3** (inclut orphelins et fichiers en attente), taille de `ducklake_catalog` < **2 Go** (`pg_database_size`) ; sensor d'échec + mail Resend. Vérifié en local : `CHECKPOINT` couvre flush, fusion, expiration, vieux fichiers **et orphelins** ; options `expire_older_than`, `delete_older_than`, `target_file_size`. Un fichier planifié pour suppression n'est effacé qu'au `CHECKPOINT` **suivant** : ~1 jour de fichiers en trop (~10 Go), **accepté** (pas de nettoyage à 3 h) | **tranché le 2026-09-28** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -203,17 +241,18 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
+**État au 2026-09-28 :** Bronze se remplit en prod (inlining + flush OK) ; audit des offsets après les redémarrages de déploiement à faire.
 
 ### Phase 3 — Branche B : dbt-duckdb (Silver / Gold) + Dagster
 **Objectif :** medallion complet sur la branche B, orchestré.
 
-- [ ] Silver : typage par collection (`posts`, `likes`, `reposts`, `follows`), dédoublonnage, gestion des `delete`
-- [ ] Gold : posts/minute, langues (`langs`), hashtags (facets), utilisateurs actifs, engagement
+- [x] **Test local préalable** (2026-09-28, sauf dbt : découpage par jour et macro testés en début de 3a) : flux de changements (D16) avec lignes inlinées, flush et `CHECKPOINT` (aucune ligne lue deux fois) ; `DELETE` d'un jour entier sans fichier de suppression ; périmètre et options de `CHECKPOINT` (D21) ; conflit entre le flush du `CHECKPOINT` et celui du sink Quix ; `SET PARTITIONED BY` depuis dbt-duckdb ; macro dbt du snapshot
+- [ ] **3a — Silver** : projet dbt-duckdb (profil : ATTACH DuckLake, UTC, `memory_limit`, `temp_directory`, `source()` sur Bronze), `silver_posts/likes/reposts/follows/deletes` (D18, D19), incrémental par snapshots (D16), dédoublonnage sur `seq`, découpage par jour
+- [ ] **3b — Gold** : `gold_activity_minute`, `gold_langs_hour`, `gold_hashtags_hour` (top 50 + `rank`), `gold_active_users_hour` (exact, D17), `gold_engagement_hour` ; incrémental par heures touchées (D19)
 - [ ] Tests dbt : `schema.yml` et `assert_*.sql`
-- [ ] Assets Dagster : `quix_bronze` (observable), `duckdb_silver`, `duckdb_gold`
-- [ ] `maintenance/ducklake.py` : flush inlined, merge adjacent files, **rétention D14** (DELETE des jours expirés : Bronze/Silver 7 j, Gold 30 j), expire snapshots, cleanup old files. Constantes `BRONZE_RETENTION_DAYS` etc. dans `config.py` (mêmes noms que velib)
-- [ ] Schedule de nettoyage quotidien à 2 h (Europe/Paris) + asset check « taille du bucket < 80 Go » avec alerte mail (D14)
-- [ ] Sensor d'échec avec alerte mail
+- [ ] **3c — Dagster** (D20) : code location `bluesky_duckdb` (code server gRPC, image sans JVM, limite 1,5 Go) déclarée dans le `workspace.yaml` du `dagster-workspace` ; `dagster-dbt` ; `quix_bronze` observable ; job de 15 min = Silver → Gold (le flush de l'inlining reste dans le sink Quix, D15) ; **`RetryPolicy` sur les assets qui lisent Bronze** (bug DuckLake : un scan de données inlinées qui croise un flush peut invalider l'instance DuckDB, un nouveau run repart proprement)
+- [ ] **3d — Maintenance** (D21) : `maintenance/ducklake.py` (`DELETE` de rétention, garde-fou D16, `CHECKPOINT` avec relances, métadonnées avant/après, purge des runs Dagster > 30 j), constantes `BRONZE_RETENTION_DAYS` etc. dans `config.py` (mêmes noms que velib), schedule à 2 h (Europe/Paris)
+- [ ] Asset checks 80 Go (listing S3) et catalogue < 2 Go, sensor d'échec avec alerte mail (Resend)
 
 **Fini quand :** Dagster matérialise Silver/Gold sur un schedule et les tests dbt passent.
 
@@ -415,6 +454,37 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - La **PR #7 visait `main`** (et non `dev`) et a été mergée avant le commit D15 : déploiement à 08:53 UTC avec D14 seulement, donc sans inlining pendant ~50 min. `dev` réaligné sur `main`, puis D15 mergé `feat` → `dev` → `main`.
 - **CI rouge sur D15** : le retry d'un flush raté remettait `_last_inlined_flush` à `0.0`, or `time.monotonic()` compte depuis le démarrage de la machine. Sur un runner GitHub démarré depuis moins d'une heure, le retry attendait tout un intervalle (même risque sur un VPS qui vient de redémarrer). Passé sur mon Mac, qui tournait depuis des jours. Corrigé avec `float("-inf")`, diagnostic confirmé en simulant `monotonic() = 100`.
 - **Déployé le 2026-09-28 à 09:42 UTC** (`e6cfe7e`) : CI verte, déploiement Coolify OK. Contrôle de la prod à faire.
-- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
+- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.
+- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
 - **Correctif** : `DUCKLAKE_DATA_INLINING_ROW_LIMIT` et `QUIX_AUTO_OFFSET_RESET` retirés du compose (valeurs dans `config.py` seulement, réglages de benchmark versionnés) et supprimés dans Coolify par Julien. Règle : pas de `${VAR:-défaut}` dans le compose pour un réglage qui doit suivre le code.
 - En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
+- **Contrôle après correctif (10:01 UTC)** : variable absente de l'environnement, limite lue = 10 000 (`/app/.venv/bin/python`, le `python` système de l'image n'a pas les dépendances). **INSERT inliné en prod : 350-640 ms (~450 ms)** par checkpoint de ~1 350 lignes, contre ~50 ms en Parquet direct (×9) ; le checkpoint s'étire de ~5,1 à ~5,5 s. **Flush : 70 842 lignes en 1,34 s** toutes les 5 min. Coût à reporter dans le benchmark face au gain en fichiers (1 fichier par jour et par flush au lieu de ~55).
+- **Fin de session** : audit des offsets en prod non lancé (requête prête dans « Prochaine session »). Phase 2 à clore après l'audit et le bilan de 24 h.
+
+### 2026-09-28 — Audit des offsets en prod
+- **Audit Bronze à 11:29 UTC** (lecture seule, dans le conteneur Quix) : **37,9 M lignes, 0 offset manquant, 0 doublon** sur les 3 partitions (12,42 M / 12,78 M / 12,70 M), de la première écriture (08:55 UTC, rattrapage des 24 h de Redpanda) jusqu'au dernier checkpoint. Les 3 redémarrages de déploiement n'ont créé aucun trou.
+- Conteneur démarré à 09:56 UTC, **0 redémarrage**, 174 Mio au repos (pic à 412 Mio / 768 pendant l'audit ou un flush). Flush toutes les 5 min : ~77-85 k lignes en 1,1-1,2 s, aucun `WARN`. INSERT inliné : ~410-455 ms pour ~1 500 lignes.
+- **Pièges de la requête d'audit** : DuckDB déborde sur disque dans `.tmp` du répertoire courant (`/app`, non inscriptible par `appuser`), d'où `temp_directory` dans `/tmp` + `memory_limit` pour ne pas faire tomber le conteneur de prod (limite 768 Mo) ; lire un `TIMESTAMPTZ` depuis Python exige `pytz`, absent de l'image, d'où le cast en `VARCHAR`.
+- **Reste pour clore la phase 2** : bilan sur 24 h (le 2026-09-29).
+
+
+### 2026-09-28 — Brainstorm phase 3
+- **Règle du benchmark actée** (section dédiée en tête) : **parité du contrat** (entrées, tables et colonnes Silver/Gold, sens des métriques, tests dbt, garanties, limites CPU/RAM, fraîcheur), **liberté des mécanismes** : chaque stack utilise ses avantages natifs, on ne bride jamais une techno pour copier l'autre. Le coût de chaque avantage est mesuré ou noté (complexité opérationnelle). Généralise la logique de D15.
+- **D16 tranché : Silver incrémental par le flux de changements DuckLake** (et non un repère sur `processed_at` choisi d'abord « pour la parité avec dbt-spark »). Sous réserve d'un test local (inlining + flush, fusion de fichiers, macro dbt).
+- **D17 tranché : `count(DISTINCT)` exact** pour les utilisateurs actifs : c'est une question de contrat de la métrique, pas de mécanisme.
+- Contexte vérifié : un `dagster-workspace` partagé tourne déjà sur le VPS (velib y est une code location). Estimation disque phase 3 : Bronze 7 j ~33 Go (126 B/ligne × 37 M/jour, au-dessus des 25 Go de D14), Silver 7 j ~20-23 Go (à mesurer), Gold < 1 Go, pic de fusion ~5 Go : **~60-65 Go**, sous l'alerte de 80 Go.
+- **D18** : `delete` en journal d'événements (`silver_deletes` à part) ; un « état courant » serait faux avec 7 j de rétention.
+- **D19** : modèles Silver/Gold, temps de référence `event_time`, top 50 hashtags/heure classés en Gold (pas de top posts), Gold incrémental par heures touchées (absorbe les données en retard).
+- **D20** : une code location Dagster par branche (pas de JVM dans l'image B, coûts attribuables : `DefaultRunLauncher`, les runs tournent dans le code server), `dagster-dbt`, Silver → Gold toutes les 15 min, conteneur à 1,5 Go. Constat sur velib (sous-processus `uv run dbt`, chemin en dur) reporté dans « À reporter dans velib ».
+- **D21** : maintenance = `DELETE` de rétention puis `CHECKPOINT` natif. D'abord écarté au profit d'étapes explicites « pour les métadonnées », argument faux relevé par Julien : durée chronométrée et différences avant/après lues dans le catalogue suffisent, seul le détail par étape est perdu.
+- **Révision de D15 envisagée puis abandonnée** : Julien a proposé de retirer le flush du sink et de ne garder que `DELETE` + `CHECKPOINT`. Flush seulement à 2 h écarté (~24 M lignes/jour, ~10-20 Go dans le Postgres partagé). Variante « flush en tête du run Dagster de 15 min » retenue un temps puis abandonnée : elle créait un conflit flush / INSERT inliné, liait la santé de Postgres à celle du `dagster-workspace` partagé (redéployé avec velib) et imposait de sommer deux conteneurs pour le coût d'ingestion. **Le flush reste dans le sink** : un seul writer sur les données inlinées, déjà mesuré en prod. Le flush du `CHECKPOINT` de 2 h couvre les lignes restantes après l'arrêt de 19:00 (phase 6).
+- **Suite** : bilan de 24 h (2026-09-29 ~10:00 UTC), clôture de la phase 2, test local préalable de la phase 3.
+
+### 2026-09-28 — Test local préalable de la phase 3
+- Catalogue isolé (`ducklake_spike`, `s3://…/spike/`), DuckDB 1.5.5, DuckLake 1.0. Piège : en Python, un `CALL`/`FROM` de fonction DuckLake ne s'exécute qu'au `fetchall()`.
+- **D16 confirmé** : `ducklake_table_insertions` donne exactement les lignes de chaque intervalle à travers inlining, flush (`flushed_inlined`) et `CHECKPOINT` (`flushed_inlined` + `merge_adjacent`) : 0 ligne sur les intervalles de maintenance, anciens intervalles intacts après fusion (27 500 / 27 500). Un intervalle expiré échoue (`No snapshot found`) : garde-fou D21 nécessaire.
+- **`DELETE` d'un jour entier** : fichier retiré du catalogue, ou suppression inlinée puis fichier retiré par le `CHECKPOINT` (`rewrite_delete`). Pas de fichier de suppression résiduel.
+- **`CHECKPOINT`** (options réglées) : 36 → 2 snapshots en 323 ms, orphelins supprimés. Les fichiers planifiés pour suppression ne partent qu'au `CHECKPOINT` suivant (~10 Go en plus, accepté par Julien).
+- **Bug DuckLake** : un flush du sink qui croise le flush d'un `CHECKPOINT` lève `InternalException: Attempted to access index 0 within vector of size 0`, qui **invalide toute l'instance DuckDB** (`FatalException` ensuite). Pas un verrou de fichier : les connexions sont en mémoire, catalogue dans Postgres. Une nouvelle connexion récupère tout (15 000 / 15 000 lignes). 76 `CHECKPOINT` concurrents côté maintenance, 0 erreur. En prod, le sink aurait planté (et rejoué un checkpoint déjà écrit) : **correctif `fix(quix)`** : `InternalException`/`FatalException` traitées comme les pannes Garage/Postgres (flush : WARN + retry ; INSERT : backpressure), `_close()` ne lève jamais. À signaler upstream (DuckLake).
+- Reste pour la 3a : découpage par jour depuis dbt-duckdb, macro dbt du dernier snapshot.
+- **Bug DuckLake reproduit hors du projet** (Postgres 17 jetable, `DATA_PATH` local, 2 processus) : c'est le **scan des données inlinées** qui plante (`PostgresMetadataManager::TransformInlinedData` ← `DuckLakeInlinedDataReader::TryInitializeScan`) quand un flush d'un autre processus les vide, et pas seulement le flush. Reproduit 3 fois sur 3 avec table découpée par jour + lignes sur deux jours + `DELETE` + `expire_older_than`/`delete_older_than` ; aucune variante réduite n'a planté en 60 s. Issue rédigée (script + sortie), à publier par Julien sur `duckdb/ducklake`. Conséquence phase 3 : `RetryPolicy` sur les assets Dagster qui lisent Bronze.
