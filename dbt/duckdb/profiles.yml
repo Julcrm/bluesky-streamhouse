@@ -1,0 +1,53 @@
+# DuckDB in memory with the DuckLake catalog attached (Postgres metadata, Parquet on Garage).
+# Mirrors src/resources/ducklake.py. Defaults only let `dbt parse` run without credentials.
+bluesky_duckdb:
+  target: default
+  outputs:
+    default:
+      type: duckdb
+      # A file, not :memory: - dbt stages each incremental batch in a temp table, which only
+      # spills to temp_directory when the DuckDB database is file-backed (a 300k-post batch
+      # overflowed 1 GB in memory). Holds no data: every model lives in the DuckLake `lake`
+      path: "{{ env_var('DBT_DUCKDB_PATH', '/tmp/bluesky_dbt.duckdb') }}"
+      # One model at a time: predictable memory in the 1.5 GB container (D20)
+      threads: 1
+      extensions:
+        - httpfs
+        - postgres
+        - ducklake
+      # Applied at connect, before ATTACH: DuckLake computes day(event_time) partitions
+      # in the session time zone
+      config_options:
+        TimeZone: UTC
+        # Lets large inserts stream and spill instead of buffering to keep row order
+        preserve_insertion_order: false
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '1GB') }}"
+        # DuckDB defaults to the host's core count, not the container's CPU limit: 12
+        # threads of JSON buffers overflow 1 GB on silver_posts, 4 or fewer fit
+        threads: "{{ env_var('DUCKDB_THREADS', '2') }}"
+        # The working directory of the image is not writable by appuser
+        temp_directory: "{{ env_var('DUCKDB_TEMP_DIRECTORY', '/tmp/duckdb') }}"
+      secrets:
+        - type: s3
+          key_id: "{{ env_var('AWS_ACCESS_KEY_ID', '') }}"
+          secret: "{{ env_var('AWS_SECRET_ACCESS_KEY', '') }}"
+          # Garage rejects signatures without its region (decision D8)
+          region: "{{ env_var('AWS_DEFAULT_REGION', 'us-east-1') }}"
+          endpoint: "{{ env_var('S3_ENDPOINT_URL', 'http://localhost:3900') | replace('http://', '') }}"
+          url_style: path
+          use_ssl: false
+        # dbt-duckdb names every secret, and DuckLake only picks up an unnamed Postgres
+        # secret by itself: the ATTACH below points to this one with META_SECRET
+        - type: postgres
+          name: ducklake_catalog
+          host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+          port: "{{ env_var('POSTGRES_PORT', '5432') }}"
+          database: "{{ env_var('DUCKLAKE_CATALOG_DB', 'ducklake_catalog') }}"
+          user: "{{ env_var('POSTGRES_USER', '') }}"
+          password: "{{ env_var('POSTGRES_PASSWORD', '') }}"
+      attach:
+        # DATA_PATH is stored in the catalog by the Quix sink's first ATTACH
+        - path: "ducklake:postgres:"
+          alias: lake
+          options:
+            meta_secret: ducklake_catalog

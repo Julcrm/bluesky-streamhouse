@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: "Bronze layer written by the Quix Streams sink (contract in src/processing/bronze.py)"
+    database: lake
+    schema: main
+    tables:
+      - name: bronze_events
+        description: >
+          One row per Jetstream commit event, append-only. Duplicates from producer
+          resumes or consumer replays are expected and removed in Silver on `seq`.

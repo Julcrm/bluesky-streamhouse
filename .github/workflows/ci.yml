@@ -32,6 +32,10 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      # Compiles every model, macro and test without a database (profile env defaults)
+      - name: Parse dbt project (branch B)
+        run: uv run dbt parse --project-dir dbt/duckdb --profiles-dir dbt/duckdb
+
       - name: Check uv.lock is up to date
         run: uv lock --check
 
