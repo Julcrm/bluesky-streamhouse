@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import duckdb
 import pytest
-from quixstreams.sinks import SinkBatch
+from quixstreams.sinks import SinkBackpressureError, SinkBatch
 
 from src.processing.bronze import BRONZE_COLUMN_NAMES, parse_bronze_event
 from src.processing.quix.app import (
@@ -87,15 +87,50 @@ def test_inlined_flush_waits_for_the_interval() -> None:
     ]
 
 
-def test_inlined_flush_failure_does_not_block_the_checkpoint() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        duckdb.IOException("garage down"),
+        # Flush racing a concurrent CHECKPOINT, then the invalidated instance
+        duckdb.InternalException("Attempted to access index 0 within vector of size 0"),
+        duckdb.FatalException("database has been invalidated"),
+    ],
+)
+def test_inlined_flush_failure_does_not_block_the_checkpoint(error: Exception) -> None:
     """A failed flush is logged, not raised (no replay), and retried at the next one."""
-    sink = _sink_with(_FakeConnection(duckdb.IOException("garage down")), interval=3600)
+    sink = _sink_with(_FakeConnection(error), interval=3600)
     sink._last_inlined_flush -= 3600
     sink.flush()  # must not raise SinkBackpressureError
     assert sink._conn is None  # reconnects on the next write
     sink._conn = _FakeConnection()  # type: ignore[assignment]
     sink.flush()
     assert sink._conn.statements  # retried without waiting another interval
+
+
+class _FailingInsertConnection(_FakeConnection):
+    """Fails the INSERT like an invalidated DuckDB instance; close() fails too."""
+
+    def register(self, name: str, table: object) -> None:
+        pass
+
+    def unregister(self, name: str) -> None:
+        pass
+
+    def execute(self, sql: str) -> "_FakeConnection":
+        if sql.startswith("INSERT"):
+            raise duckdb.FatalException("database has been invalidated")
+        return super().execute(sql)
+
+    def close(self) -> None:
+        raise duckdb.FatalException("database has been invalidated")
+
+
+def test_insert_on_invalidated_instance_replays_the_checkpoint() -> None:
+    """Backpressure (Quix replays the checkpoint) and a fresh connection, not a crash."""
+    sink = _sink_with(_FailingInsertConnection(), interval=3600)
+    with pytest.raises(SinkBackpressureError):
+        sink._insert([_batch(0, [1, 2])])
+    assert sink._conn is None
 
 
 @pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")

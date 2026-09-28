@@ -37,6 +37,17 @@ from src.resources.ducklake import DuckLakeSettings, connect, set_write_options,
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
 
+# Errors a fresh connection recovers from: Garage or Postgres down, and DuckLake's
+# internal error when this flush races the flush of a concurrent CHECKPOINT
+# ("index 0 within vector of size 0"), which invalidates the whole DuckDB instance
+RECOVERABLE_ERRORS = (
+    duckdb.IOException,
+    duckdb.HTTPException,
+    duckdb.ConnectionException,
+    duckdb.InternalException,
+    duckdb.FatalException,
+)
+
 # Arrow types matching the DuckDB types of the Bronze contract
 ARROW_TYPES = {
     "BIGINT": pa.int64(),
@@ -151,7 +162,7 @@ class DuckLakeBronzeSink(BatchingSink):
                 )
                 .fetchall()
             )
-        except (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException) as e:
+        except RECOVERABLE_ERRORS as e:
             logger.warning(f"Inlined data flush failed ({e}), retrying at the next checkpoint")
             self._close()
             # -inf, not 0: monotonic() counts from boot, so 0 is less than one interval
@@ -176,7 +187,7 @@ class DuckLakeBronzeSink(BatchingSink):
                 )
             finally:
                 conn.unregister("bronze_batch")
-        except (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException) as e:
+        except RECOVERABLE_ERRORS as e:
             # Garage or Postgres unavailable: offsets are not committed, Quix pauses and
             # seeks back to the checkpoint start, then retries with a fresh connection
             logger.warning(
@@ -191,9 +202,12 @@ class DuckLakeBronzeSink(BatchingSink):
         )
 
     def _close(self) -> None:
+        """Drop the connection; never raises, the instance may already be invalidated."""
         if self._conn is not None:
             try:
                 self._conn.close()
+            except duckdb.Error as e:
+                logger.warning(f"Closing the DuckDB connection failed ({e})")
             finally:
                 self._conn = None
 
