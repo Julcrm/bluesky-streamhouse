@@ -15,7 +15,9 @@ ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_NO_CACHE=1 \
-    DAGSTER_HOME=/app/dagster_home \
+    # Same path as the dagster-workspace: runs launched by its daemon or webserver carry
+    # its instance config, and every step writes its compute logs under this directory
+    DAGSTER_HOME=/opt/dagster/dagster_home \
     # dagster-dbt starts the `dbt` executable by name
     PATH="/app/.venv/bin:$PATH"
 
@@ -25,11 +27,11 @@ RUN uv sync --frozen --no-dev --group dagster
 
 COPY src ./src
 COPY dbt/duckdb ./dbt/duckdb
-COPY docker/dagster/dagster.yaml ./dagster_home/dagster.yaml
+COPY docker/dagster/dagster.yaml /opt/dagster/dagster_home/dagster.yaml
 
 # dbt writes target/ and logs/ in the project at every run
 RUN adduser --disabled-password --gecos '' appuser \
-    && chown -R appuser /app/dbt/duckdb /app/dagster_home
+    && chown -R appuser /app/dbt/duckdb /opt/dagster
 USER appuser
 
 # DuckDB extensions downloaded at build time into ~/.duckdb, never at runtime
