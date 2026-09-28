@@ -13,3 +13,5 @@ build
 dbt/*/target
 dbt/*/dbt_packages
 state/
+dbt/*/logs
+.tmp_dagster_home_*

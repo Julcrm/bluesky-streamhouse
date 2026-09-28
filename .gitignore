@@ -20,3 +20,6 @@ dbt/*/target/
 dbt/*/logs/
 dbt/*/dbt_packages/
 dbt/*/.user.yml
+
+# dagster CLI temporary instance
+.tmp_dagster_home_*/
