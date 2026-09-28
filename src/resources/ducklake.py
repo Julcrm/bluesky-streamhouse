@@ -41,6 +41,15 @@ class DuckLakeSettings:
     alias: str = config.DUCKLAKE_BRONZE_ALIAS
 
 
+def transform_settings() -> DuckLakeSettings:
+    """Settings of the transform catalog, where dbt writes Silver and Gold (decision D22)."""
+    return DuckLakeSettings(
+        data_path=config.DUCKLAKE_TRANSFORM_DATA_PATH,
+        metadata_schema=config.DUCKLAKE_TRANSFORM_METADATA_SCHEMA,
+        alias=config.DUCKLAKE_TRANSFORM_ALIAS,
+    )
+
+
 def sql_literal(value: str | int) -> str:
     """Quote a value as a SQL string literal (CREATE SECRET does not accept parameters)."""
     return "'" + str(value).replace("'", "''") + "'"

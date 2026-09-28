@@ -29,12 +29,16 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check .
 
+      # Compiles every model, macro and test without a database (profile env defaults).
+      # Before the tests: the Dagster definitions load the manifest it writes
+      - name: Parse dbt project (branch B)
+        run: uv run dbt parse --project-dir dbt/duckdb --profiles-dir dbt/duckdb
+
       - name: Run tests
         run: uv run pytest
 
-      # Compiles every model, macro and test without a database (profile env defaults)
-      - name: Parse dbt project (branch B)
-        run: uv run dbt parse --project-dir dbt/duckdb --profiles-dir dbt/duckdb
+      - name: Validate Dagster definitions (branch B)
+        run: uv run dagster definitions validate -m src.dagster.definitions
 
       - name: Check uv.lock is up to date
         run: uv lock --check

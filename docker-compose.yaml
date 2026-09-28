@@ -3,9 +3,11 @@
 # Services:
 #   - producer: Jetstream v2 -> Redpanda `raw_events` (no exposed port)
 #   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port)
+#   - bluesky-duckdb: branch B Dagster gRPC code server, Silver/Gold dbt assets
+#     (port 4000 on the coolify network only; the service name is its DNS alias)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
-# Services of later phases (Spark, Dagster code server, API) are added here.
+# Services of later phases (Spark, API) are added here.
 # Network: coolify (external)
 # =============================================================================
 
@@ -58,6 +60,44 @@ services:
       resources:
         limits:
           memory: 768M  # measured ~280 MiB after a 50k-row catch-up batch
+    networks:
+      - coolify
+    restart: always
+
+  # Branch B Dagster code location `bluesky_duckdb` (decision D20). The shared
+  # dagster-workspace reaches it at bluesky-duckdb:4000 (Coolify adds the service name
+  # as network alias). Runs execute here: dbt + DuckDB memory counts against this limit
+  bluesky-duckdb:
+    build:
+      context: .
+      dockerfile: docker/dagster/Dockerfile
+    expose:
+      - "4000"
+    environment:
+      # Dagster storage, shared with dagster-workspace
+      - DAGSTER_POSTGRES_USER=${DAGSTER_POSTGRES_USER}
+      - DAGSTER_POSTGRES_PASSWORD=${DAGSTER_POSTGRES_PASSWORD}
+      - DAGSTER_POSTGRES_HOST=${DAGSTER_POSTGRES_HOST}
+      - DAGSTER_POSTGRES_DB=${DAGSTER_POSTGRES_DB}
+      # DuckLake catalogs on the shared Postgres (decisions D12, D22)
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DUCKLAKE_CATALOG_DB=${DUCKLAKE_CATALOG_DB:-ducklake_catalog}
+      # Garage, key `bluesky` (RWO on this bucket only)
+      - S3_ENDPOINT_URL=http://garage:3900
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+      - BUCKET=${BUCKET:-bluesky-streamhouse}
+    # A run in progress is interrupted on redeploy; the next schedule tick resumes
+    # from the last Bronze snapshot Silver read (incremental by snapshot, D16)
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M  # DuckDB memory_limit 1 GB (dbt profile) + dagster; ~200 MiB idle
     networks:
       - coolify
     restart: always
