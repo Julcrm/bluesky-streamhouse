@@ -88,14 +88,12 @@ DUCKLAKE_BRONZE_METADATA_SCHEMA = "bronze"
 DUCKLAKE_TRANSFORM_ALIAS = "transform"
 DUCKLAKE_TRANSFORM_METADATA_SCHEMA = "transform"
 # Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet
-# (decision D15). Above a live checkpoint (~2 000 rows, ~3 000 at peak), below a
-# catch-up one (QUIX_COMMIT_EVERY): live writes are inlined, catch-up writes Parquet.
-# DuckLake's default is 10, which never inlines a checkpoint.
-# Measured cost, kept as a benchmark result: an inlined insert of this 13-column table
-# grows faster than its row count (2 000 rows ~1.4 s, 8 000 rows ~20 s locally), so a
-# slow commit makes the next checkpoint bigger and slower until it passes the limit and
-# goes to Parquet (~0.2 s). Straight Parquet (limit 0) commits in ~0.1 s
-DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "10000"))
+# (decision D15). A live checkpoint is 5 s of traffic: ~1 100 to ~2 800 rows in
+# production (226-560 msg/s by hour), so it is inlined. An inlined insert costs more
+# than its row count (prod: ~1 s for 2 200 rows, ~20 s for 9 900 after a traffic burst),
+# so bigger batches (bursts, catch-up) go straight to Parquet (~0.2 s) instead.
+# DuckLake's default is 10, which never inlines a checkpoint
+DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "5000"))
 # The Quix sink moves inlined rows to Parquet this often: one file per day every
 # ~5 min instead of one per checkpoint, and the flush cost stays in branch B's container
 DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
