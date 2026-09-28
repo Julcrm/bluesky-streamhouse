@@ -76,9 +76,14 @@ POSTGRES_USER = os.getenv("POSTGRES_USER", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 DUCKLAKE_CATALOG_DB = os.getenv("DUCKLAKE_CATALOG_DB", "ducklake_catalog")
 DUCKLAKE_ALIAS = "lake"
-# Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet.
-# 10 is DuckLake's default, pinned here so the benchmark setting is explicit (phase 2)
-DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "10"))
+# Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet
+# (decision D15). Above a live checkpoint (~2 000 rows, ~3 000 at peak), below a
+# catch-up one (QUIX_COMMIT_EVERY): live writes are inlined, catch-up writes Parquet.
+# DuckLake's default is 10, which never inlines a checkpoint
+DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "10000"))
+# The Quix sink moves inlined rows to Parquet this often: one file per day every
+# ~5 min instead of one per checkpoint, and the flush cost stays in branch B's container
+DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
 # DuckLake writes Snappy by default: zstd cuts Bronze from 213 to 121 B/row (decision D14).
 # Persisted in the catalog, applies to files written afterwards
 DUCKLAKE_PARQUET_COMPRESSION = "zstd"

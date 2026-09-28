@@ -1,5 +1,6 @@
 """Unit tests for src.resources.ducklake, plus one round trip against the local stack."""
 
+import dataclasses
 import socket
 import uuid
 
@@ -99,7 +100,7 @@ def _local_stack_up() -> bool:
 def test_connect_round_trip_on_local_stack() -> None:
     """Write through the inlining path and the Parquet path, read back, clean up."""
     table = f"lake.main.test_{uuid.uuid4().hex[:8]}"
-    conn = connect()
+    conn = connect(dataclasses.replace(DuckLakeSettings(), inlining_row_limit=10))
     try:
         conn.execute(f"CREATE TABLE {table} (id INTEGER)")
         conn.execute(f"INSERT INTO {table} SELECT range FROM range(5)")  # inlined

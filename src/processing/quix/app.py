@@ -6,6 +6,10 @@ Delivery is at-least-once: Quix commits Kafka offsets only after the sink flush 
 checkpoint succeeds. All partitions of a checkpoint go in a single INSERT, so each
 checkpoint (every QUIX_COMMIT_INTERVAL_SECONDS) is exactly one DuckLake snapshot, the
 same cadence as Spark's 5 s trigger in branch A.
+
+Live checkpoints are inlined in the Postgres catalog and flushed to Parquet every few
+minutes by the sink itself (decision D15). Rows still inlined when the app stops are
+flushed at the next start or by the nightly maintenance (phase 3).
 """
 
 import time
@@ -28,7 +32,7 @@ from src.processing.bronze import (
     duckdb_partition_ddl,
     parse_bronze_event,
 )
-from src.resources.ducklake import DuckLakeSettings, connect, set_write_options
+from src.resources.ducklake import DuckLakeSettings, connect, set_write_options, sql_literal
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
@@ -76,16 +80,26 @@ def arrow_table_from_batches(batches: list[SinkBatch], processed_at: datetime) -
 
 
 class DuckLakeBronzeSink(BatchingSink):
-    """Writes each Quix checkpoint to DuckLake Bronze as one transaction."""
+    """Writes each Quix checkpoint to DuckLake Bronze as one transaction.
 
-    def __init__(self, settings: DuckLakeSettings | None = None) -> None:
+    Live checkpoints stay below the inlining limit and land in the Postgres catalog;
+    every `inlined_flush_interval` seconds the sink moves them to Parquet (decision D15).
+    """
+
+    def __init__(
+        self,
+        settings: DuckLakeSettings | None = None,
+        inlined_flush_interval: float = config.DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS,
+    ) -> None:
         super().__init__()
         self._settings = settings or DuckLakeSettings()
         self._table = f"{self._settings.alias}.main.{BRONZE_TABLE}"
         self._conn: duckdb.DuckDBPyConnection | None = None
+        self._inlined_flush_interval = inlined_flush_interval
+        self._last_inlined_flush = time.monotonic()
 
     def setup(self) -> None:
-        """Attach the lake, set write options, create and partition Bronze (called once).
+        """Attach the lake, set write options, create and partition Bronze, flush leftovers.
 
         Options and partitioning only apply to files written afterwards, so they must be
         in place before the first insert (decision D14).
@@ -94,6 +108,8 @@ class DuckLakeBronzeSink(BatchingSink):
         set_write_options(conn, self._settings.alias)
         conn.execute(duckdb_ddl(self._table))
         conn.execute(duckdb_partition_ddl(self._table))
+        # Rows left inlined by the previous run (stopped before its next flush)
+        self._flush_inlined()
 
     def _connection(self) -> duckdb.DuckDBPyConnection:
         """Current connection, reopened after a storage or catalog failure."""
@@ -113,6 +129,36 @@ class DuckLakeBronzeSink(BatchingSink):
                 self._insert(batches)
         finally:
             self._batches.clear()
+        if time.monotonic() - self._last_inlined_flush >= self._inlined_flush_interval:
+            self._flush_inlined()
+
+    def _flush_inlined(self) -> None:
+        """Move inlined rows from the catalog to Parquet files (one per day partition).
+
+        Runs after the checkpoint insert succeeded, so a failure here must not raise
+        SinkBackpressureError: Quix would replay an already written checkpoint. The rows
+        are safe in Postgres and the next checkpoint retries the flush.
+        """
+        self._last_inlined_flush = time.monotonic()
+        alias, schema, table = self._table.split(".")
+        started = time.perf_counter()
+        try:
+            flushed = (
+                self._connection()
+                .execute(
+                    f"CALL ducklake_flush_inlined_data({sql_literal(alias)}, "
+                    f"schema_name => {sql_literal(schema)}, table_name => {sql_literal(table)})"
+                )
+                .fetchall()
+            )
+        except (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException) as e:
+            logger.warning(f"Inlined data flush failed ({e}), retrying at the next checkpoint")
+            self._close()
+            self._last_inlined_flush = 0.0
+            return
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        rows = sum(row[-1] for row in flushed)
+        logger.info(f"Inlined flush: {rows} rows moved to Parquet in {elapsed_ms:.0f} ms")
 
     def _insert(self, batches: list[SinkBatch]) -> None:
         processed_at = datetime.now(UTC)
