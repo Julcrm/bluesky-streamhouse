@@ -5,7 +5,7 @@
 --               hashtags (facet tags + record tags, lowercase) and mentions are
 --               typed out of the raw record. Deletions live in silver_deletes (D18).
 -- Source      : bronze.bronze_events (new DuckLake snapshots only, D16)
--- Output      : lake.silver.silver_posts, split by day(event_time)
+-- Output      : transform.silver.silver_posts, split by day(event_time)
 -- =============================================================================
 
 WITH bronze AS (

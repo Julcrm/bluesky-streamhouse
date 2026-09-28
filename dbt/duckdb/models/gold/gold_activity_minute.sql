@@ -10,7 +10,7 @@
 --               Post edits (operation = update) are not counted.
 -- Source      : silver_posts, silver_likes, silver_reposts, silver_follows,
 --               silver_deletes (hours touched since the last run, D19)
--- Output      : lake.gold.gold_activity_minute, split by day(minute)
+-- Output      : transform.gold.gold_activity_minute, split by day(minute)
 -- =============================================================================
 
 {%- set silver_models = ['silver_posts', 'silver_likes', 'silver_reposts', 'silver_follows', 'silver_deletes'] %}

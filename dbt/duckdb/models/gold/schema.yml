@@ -1,7 +1,7 @@
 version: 2
 
 # Gold keeps 30 days (D14) and is small (thousands of rows a day): tests scan it whole.
-# Every row carries silver_snapshot_id, the lake snapshot its hour was rebuilt at (D19).
+# Every row carries silver_snapshot_id, the transform catalog snapshot its hour was rebuilt at (D19).
 
 models:
   - name: gold_activity_minute

@@ -21,7 +21,8 @@ EXTENSIONS = ("ducklake", "postgres", "httpfs")
 
 @dataclass(frozen=True)
 class DuckLakeSettings:
-    """Everything needed to attach the lake; defaults come from `src.config`."""
+    """Everything needed to attach one DuckLake catalog; defaults attach the Bronze one
+    (written by the Quix sink) from `src.config`."""
 
     catalog_host: str = config.POSTGRES_HOST
     catalog_port: int = config.POSTGRES_PORT
@@ -32,10 +33,12 @@ class DuckLakeSettings:
     s3_region: str = config.S3_REGION
     s3_access_key_id: str = config.S3_ACCESS_KEY_ID
     s3_secret_access_key: str = config.S3_SECRET_ACCESS_KEY
-    data_path: str = config.DUCKLAKE_DATA_PATH
+    data_path: str = config.DUCKLAKE_BRONZE_DATA_PATH
+    # Postgres schema holding this catalog's metadata tables (one per catalog, D15)
+    metadata_schema: str = config.DUCKLAKE_BRONZE_METADATA_SCHEMA
     # Not persisted by DuckLake: applied on every ATTACH
     inlining_row_limit: int = config.DUCKLAKE_DATA_INLINING_ROW_LIMIT
-    alias: str = config.DUCKLAKE_ALIAS
+    alias: str = config.DUCKLAKE_BRONZE_ALIAS
 
 
 def sql_literal(value: str | int) -> str:
@@ -57,6 +60,7 @@ def setup_statements(settings: DuckLakeSettings, read_only: bool = False) -> lis
     s = sql_literal
     attach_options = [
         f"DATA_PATH {s(settings.data_path)}",
+        f"METADATA_SCHEMA {s(settings.metadata_schema)}",
         f"DATA_INLINING_ROW_LIMIT {int(settings.inlining_row_limit)}",
     ]
     if read_only:
@@ -82,8 +86,10 @@ def setup_statements(settings: DuckLakeSettings, read_only: bool = False) -> lis
     ]
 
 
-def set_write_options(conn: duckdb.DuckDBPyConnection, alias: str = config.DUCKLAKE_ALIAS) -> None:
-    """Persist lake-wide write options in the catalog (idempotent, needs a writable lake)."""
+def set_write_options(
+    conn: duckdb.DuckDBPyConnection, alias: str = config.DUCKLAKE_BRONZE_ALIAS
+) -> None:
+    """Persist catalog-wide write options in the catalog (idempotent, needs a writable lake)."""
     conn.execute(
         f"CALL {alias}.set_option('parquet_compression', "
         f"{sql_literal(config.DUCKLAKE_PARQUET_COMPRESSION)})"
@@ -93,7 +99,7 @@ def set_write_options(conn: duckdb.DuckDBPyConnection, alias: str = config.DUCKL
 def connect(
     settings: DuckLakeSettings | None = None, read_only: bool = False
 ) -> duckdb.DuckDBPyConnection:
-    """Open an in-memory DuckDB connection with the lake attached and selected."""
+    """Open an in-memory DuckDB connection with one catalog attached and selected."""
     settings = settings or DuckLakeSettings()
     conn = duckdb.connect()
     try:

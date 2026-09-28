@@ -3,7 +3,7 @@ version: 2
 sources:
   - name: bronze
     description: "Bronze layer written by the Quix Streams sink (contract in src/processing/bronze.py)"
-    database: lake
+    database: bronze
     schema: main
     tables:
       - name: bronze_events
