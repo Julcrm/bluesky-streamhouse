@@ -4,7 +4,7 @@
 --               deduplicated on seq. subject_did is the followed account.
 --               Unfollows live in silver_deletes (D18).
 -- Source      : bronze.bronze_events (new DuckLake snapshots only, D16)
--- Output      : lake.silver.silver_follows, split by day(event_time)
+-- Output      : transform.silver.silver_follows, split by day(event_time)
 -- =============================================================================
 
 WITH bronze AS (

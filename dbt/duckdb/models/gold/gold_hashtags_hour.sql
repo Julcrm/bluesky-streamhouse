@@ -4,7 +4,7 @@
 --               Ranking lives here, not in the API (business logic in Gold only).
 --               Ties are broken alphabetically so the rank is deterministic.
 -- Source      : silver_posts (hours touched since the last run, D19)
--- Output      : lake.gold.gold_hashtags_hour, split by day(hour)
+-- Output      : transform.gold.gold_hashtags_hour, split by day(hour)
 -- =============================================================================
 
 {%- set last_read, current = gold_snapshot_range() %}

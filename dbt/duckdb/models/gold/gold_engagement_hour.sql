@@ -6,7 +6,7 @@
 --               than the hour, so a net value can be negative).
 -- Source      : silver_posts, silver_likes, silver_reposts, silver_deletes
 --               (hours touched since the last run, D19)
--- Output      : lake.gold.gold_engagement_hour, split by day(hour)
+-- Output      : transform.gold.gold_engagement_hour, split by day(hour)
 -- =============================================================================
 
 {%- set silver_models = ['silver_posts', 'silver_likes', 'silver_reposts', 'silver_deletes'] %}

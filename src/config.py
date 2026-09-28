@@ -67,7 +67,11 @@ BUCKET = os.getenv("BUCKET", "bluesky-streamhouse")
 
 ICEBERG_WAREHOUSE = f"s3a://{BUCKET}/iceberg"
 SPARK_CHECKPOINT_PATH = f"s3a://{BUCKET}/checkpoints/spark"
-DUCKLAKE_DATA_PATH = f"s3://{BUCKET}/ducklake/"
+# One DuckLake catalog per writer (decision D15): Quix writes Bronze, dbt writes Silver
+# and Gold. Data paths must not overlap: a catalog's CHECKPOINT deletes every file under
+# its DATA_PATH that it does not track, so a nested path would lose the other's files
+DUCKLAKE_BRONZE_DATA_PATH = f"s3://{BUCKET}/ducklake/bronze/"
+DUCKLAKE_TRANSFORM_DATA_PATH = f"s3://{BUCKET}/ducklake/transform/"
 
 # --- Postgres (DuckLake catalog) ---
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
@@ -75,12 +79,24 @@ POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 DUCKLAKE_CATALOG_DB = os.getenv("DUCKLAKE_CATALOG_DB", "ducklake_catalog")
-DUCKLAKE_ALIAS = "lake"
-# Data inlining disabled (decision D15, revised): DuckLake numbers snapshots lake-wide,
-# so a dbt commit makes the Quix commit retry, and an inlined retry re-sends every row
-# to Postgres (p50 3.9 s vs 45 ms straight to Parquet under dbt-like commits). The
-# small Parquet files are merged by the nightly CHECKPOINT (decision D21)
-DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "0"))
+# Both catalogs live in the same Postgres database, one metadata schema each. DuckLake
+# numbers snapshots per catalog: with a single catalog, every dbt commit collided with
+# the concurrent Quix commit (duplicate snapshot id, retried up to 10 times, and each
+# retry re-sends the inlined rows): 0.7 s inserts went to 8 s in a local test
+DUCKLAKE_BRONZE_ALIAS = "bronze"
+DUCKLAKE_BRONZE_METADATA_SCHEMA = "bronze"
+DUCKLAKE_TRANSFORM_ALIAS = "transform"
+DUCKLAKE_TRANSFORM_METADATA_SCHEMA = "transform"
+# Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet
+# (decision D15). A live checkpoint is 5 s of traffic: ~1 100 to ~2 800 rows in
+# production (226-560 msg/s by hour), so it is inlined. An inlined insert costs more
+# than its row count (prod: ~1 s for 2 200 rows, ~20 s for 9 900 after a traffic burst),
+# so bigger batches (bursts, catch-up) go straight to Parquet (~0.2 s) instead.
+# DuckLake's default is 10, which never inlines a checkpoint
+DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "5000"))
+# The Quix sink moves inlined rows to Parquet this often: one file per day every
+# ~5 min instead of one per checkpoint, and the flush cost stays in branch B's container
+DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
 # DuckLake writes Snappy by default: zstd cuts Bronze from 213 to 121 B/row (decision D14).
 # Persisted in the catalog, applies to files written afterwards
 DUCKLAKE_PARQUET_COMPRESSION = "zstd"

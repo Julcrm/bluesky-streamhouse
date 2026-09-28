@@ -5,7 +5,7 @@
 --               A delete carries no record: only the key of the deleted record,
 --               which is often older than the 7-day retention (decision D18).
 -- Source      : bronze.bronze_events (new DuckLake snapshots only, D16)
--- Output      : lake.silver.silver_deletes, split by day(event_time)
+-- Output      : transform.silver.silver_deletes, split by day(event_time)
 -- =============================================================================
 
 WITH bronze AS (

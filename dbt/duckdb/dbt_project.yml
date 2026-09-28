@@ -21,7 +21,7 @@ vars:
 
 models:
   bluesky_duckdb:
-    +database: lake
+    +database: transform
     silver:
       +schema: silver
       # Append only new Bronze snapshots (D16), files split by event day like Bronze (D14)

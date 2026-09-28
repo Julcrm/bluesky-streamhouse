@@ -1,7 +1,7 @@
 -- =============================================================================
 -- Incremental Gold: rebuild only the hours touched by new Silver rows (decision D19).
 --
--- Each Gold row carries `silver_snapshot_id`, the lake snapshot its run read Silver at.
+-- Each Gold row carries `silver_snapshot_id`, the transform catalog snapshot its run read Silver at.
 -- The next run lists the hours of the Silver rows inserted after that snapshot (DuckLake
 -- change feed, as in D16), recomputes those whole hours from Silver frozen at the current
 -- snapshot, and replaces them (delete+insert on the hour or minute key). Late rows, such

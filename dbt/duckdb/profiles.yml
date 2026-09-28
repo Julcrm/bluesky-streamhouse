@@ -1,4 +1,5 @@
-# DuckDB in memory with the DuckLake catalog attached (Postgres metadata, Parquet on Garage).
+# DuckDB with the two DuckLake catalogs of branch B attached (Postgres metadata, Parquet on
+# Garage): Bronze, read only, and the transform catalog dbt writes Silver and Gold to.
 # Mirrors src/resources/ducklake.py. Defaults only let `dbt parse` run without credentials.
 bluesky_duckdb:
   target: default
@@ -7,7 +8,7 @@ bluesky_duckdb:
       type: duckdb
       # A file, not :memory: - dbt stages each incremental batch in a temp table, which only
       # spills to temp_directory when the DuckDB database is file-backed (a 300k-post batch
-      # overflowed 1 GB in memory). Holds no data: every model lives in the DuckLake `lake`
+      # overflowed 1 GB in memory). Holds no data: every model lives in the DuckLake `transform`
       path: "{{ env_var('DBT_DUCKDB_PATH', '/tmp/bluesky_dbt.duckdb') }}"
       # One model at a time: predictable memory in the 1.5 GB container (D20)
       threads: 1
@@ -37,7 +38,7 @@ bluesky_duckdb:
           url_style: path
           use_ssl: false
         # dbt-duckdb names every secret, and DuckLake only picks up an unnamed Postgres
-        # secret by itself: the ATTACH below points to this one with META_SECRET
+        # secret by itself: the ATTACHes below point to this one with META_SECRET
         - type: postgres
           name: ducklake_catalog
           host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
@@ -45,9 +46,22 @@ bluesky_duckdb:
           database: "{{ env_var('DUCKLAKE_CATALOG_DB', 'ducklake_catalog') }}"
           user: "{{ env_var('POSTGRES_USER', '') }}"
           password: "{{ env_var('POSTGRES_PASSWORD', '') }}"
+      # One catalog per writer (decision D15): DuckLake numbers snapshots per catalog, so
+      # dbt commits never take the snapshot id of a concurrent Quix commit.
+      # Metadata schemas and data paths mirror src/config.py (dbt cannot import it)
       attach:
-        # DATA_PATH is stored in the catalog by the Quix sink's first ATTACH
+        # Written by the Quix sink, which stored its DATA_PATH at its first ATTACH
         - path: "ducklake:postgres:"
-          alias: lake
+          alias: bronze
+          read_only: true
           options:
             meta_secret: ducklake_catalog
+            metadata_schema: bronze
+        # Silver and Gold. Its data path must stay outside Bronze's: a CHECKPOINT deletes
+        # every file under its DATA_PATH that its own catalog does not track
+        - path: "ducklake:postgres:"
+          alias: transform
+          options:
+            meta_secret: ducklake_catalog
+            metadata_schema: transform
+            data_path: "s3://{{ env_var('BUCKET', 'bluesky-streamhouse') }}/ducklake/transform/"

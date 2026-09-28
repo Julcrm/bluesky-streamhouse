@@ -25,9 +25,10 @@ SETTINGS = DuckLakeSettings(
     s3_region="us-east-1",
     s3_access_key_id="GKtest",
     s3_secret_access_key="s3-secret",
-    data_path="s3://bucket/ducklake/",
+    data_path="s3://bucket/ducklake/bronze/",
+    metadata_schema="bronze",
     inlining_row_limit=10,
-    alias="lake",
+    alias="bronze",
 )
 
 
@@ -66,11 +67,13 @@ def test_setup_postgres_secret_is_unnamed() -> None:
 
 
 def test_setup_attach_options() -> None:
-    """ATTACH carries the data path, the inlining limit, and READ_ONLY on request."""
+    """ATTACH carries the data path, the metadata schema, the inlining limit, and
+    READ_ONLY on request."""
     attach = next(s for s in setup_statements(SETTINGS) if s.startswith("ATTACH"))
     assert attach == (
-        "ATTACH 'ducklake:postgres:' AS lake "
-        "(DATA_PATH 's3://bucket/ducklake/', DATA_INLINING_ROW_LIMIT 10)"
+        "ATTACH 'ducklake:postgres:' AS bronze "
+        "(DATA_PATH 's3://bucket/ducklake/bronze/', METADATA_SCHEMA 'bronze', "
+        "DATA_INLINING_ROW_LIMIT 10)"
     )
     attach_ro = next(
         s for s in setup_statements(SETTINGS, read_only=True) if s.startswith("ATTACH")
@@ -99,7 +102,7 @@ def _local_stack_up() -> bool:
 @pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")
 def test_connect_round_trip_on_local_stack() -> None:
     """Write through the inlining path and the Parquet path, read back, clean up."""
-    table = f"lake.main.test_{uuid.uuid4().hex[:8]}"
+    table = f"bronze.main.test_{uuid.uuid4().hex[:8]}"
     conn = connect(dataclasses.replace(DuckLakeSettings(), inlining_row_limit=10))
     try:
         conn.execute(f"CREATE TABLE {table} (id INTEGER)")
@@ -107,10 +110,10 @@ def test_connect_round_trip_on_local_stack() -> None:
         conn.execute(f"INSERT INTO {table} SELECT range FROM range(1000)")  # Parquet
         assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (1005,)
         files = conn.execute(
-            f"SELECT data_file FROM ducklake_list_files('lake', '{table.split('.')[-1]}')"
+            f"SELECT data_file FROM ducklake_list_files('bronze', '{table.split('.')[-1]}')"
         ).fetchall()
         assert len(files) == 1
-        assert files[0][0].startswith(config.DUCKLAKE_DATA_PATH)
+        assert files[0][0].startswith(config.DUCKLAKE_BRONZE_DATA_PATH)
     finally:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.close()
