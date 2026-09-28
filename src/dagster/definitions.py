@@ -8,6 +8,7 @@ against its own limit: the cost of branch B's transformations stays attributable
 
 from dagster import (
     AssetSelection,
+    DagsterRun,
     DagsterRunStatus,
     DefaultScheduleStatus,
     Definitions,
@@ -39,6 +40,17 @@ silver_gold_job = define_asset_job(
 )
 
 
+def blocks_schedule(run: DagsterRun, job_name: str = "bluesky_silver_gold") -> bool:
+    """True for an unfinished run of this code location: the scheduled job, or a manual
+    materialization from the UI (`__ASSET_JOB`), which writes the same tables."""
+    origin = run.remote_job_origin
+    if origin is None:  # run created outside a code location (tests, execute_in_process)
+        return run.job_name == job_name
+    return origin.repository_origin.code_location_origin.location_name == (
+        config.DAGSTER_CODE_LOCATION
+    )
+
+
 @schedule(
     job=silver_gold_job,
     cron_schedule=config.DAGSTER_SCHEDULE_CRON,
@@ -46,12 +58,15 @@ silver_gold_job = define_asset_job(
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every 15 min, one run at a time: a catch-up run can outlast the interval."""
-    active = context.instance.get_run_records(
-        RunsFilter(job_name=silver_gold_job.name, statuses=ACTIVE_RUN_STATUSES), limit=1
-    )
+    """Every 15 min, one run at a time: a catch-up run can outlast the interval, and a
+    second dbt would wait on the first one's DuckDB file lock and fail."""
+    active = [
+        record.dagster_run
+        for record in context.instance.get_run_records(RunsFilter(statuses=ACTIVE_RUN_STATUSES))
+        if blocks_schedule(record.dagster_run, silver_gold_job.name)
+    ]
     if active:
-        return SkipReason(f"Run {active[0].dagster_run.run_id} still in progress")
+        return SkipReason(f"Run {active[0].run_id} ({active[0].job_name}) still in progress")
     return RunRequest()
 
 

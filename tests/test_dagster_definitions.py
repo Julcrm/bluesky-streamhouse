@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 from dagster import (
@@ -58,3 +59,27 @@ def test_stop_terminates_a_running_dbt_process() -> None:
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     _stop(process, timeout=5)
     assert process.poll() is not None
+
+
+def _run_from(location: str, job_name: str = "__ASSET_JOB") -> SimpleNamespace:
+    """A run as launched by the dagster-workspace from a given code location."""
+    origin = SimpleNamespace(
+        repository_origin=SimpleNamespace(
+            code_location_origin=SimpleNamespace(location_name=location)
+        )
+    )
+    return SimpleNamespace(remote_job_origin=origin, job_name=job_name)
+
+
+def test_manual_materialization_of_this_location_blocks_the_schedule() -> None:
+    """A "Materialize all" from the UI runs as __ASSET_JOB: it must block the schedule."""
+    from src.dagster.definitions import blocks_schedule
+
+    assert blocks_schedule(_run_from("bluesky_duckdb"))
+
+
+def test_runs_of_other_locations_do_not_block() -> None:
+    """velib runs share the Dagster instance but never block branch B."""
+    from src.dagster.definitions import blocks_schedule
+
+    assert not blocks_schedule(_run_from("velib_lakehouse", "velib_pipeline_job"))
