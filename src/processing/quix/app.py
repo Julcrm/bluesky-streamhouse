@@ -7,9 +7,8 @@ checkpoint succeeds. All partitions of a checkpoint go in a single INSERT, so ea
 checkpoint (every QUIX_COMMIT_INTERVAL_SECONDS) is exactly one DuckLake snapshot, the
 same cadence as Spark's 5 s trigger in branch A.
 
-Live checkpoints are inlined in the Postgres catalog and flushed to Parquet every few
-minutes by the sink itself (decision D15). Rows still inlined when the app stops are
-flushed at the next start or by the nightly maintenance (phase 3).
+Every checkpoint is written straight to Parquet, without data inlining (decision D15,
+revised): the small files are merged by the nightly DuckLake CHECKPOINT (decision D21).
 """
 
 import time
@@ -32,18 +31,20 @@ from src.processing.bronze import (
     duckdb_partition_ddl,
     parse_bronze_event,
 )
-from src.resources.ducklake import DuckLakeSettings, connect, set_write_options, sql_literal
+from src.resources.ducklake import DuckLakeSettings, connect, set_write_options
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
 
-# Errors a fresh connection recovers from: Garage or Postgres down, and DuckLake's
-# internal error when this flush races the flush of a concurrent CHECKPOINT
-# ("index 0 within vector of size 0"), which invalidates the whole DuckDB instance
+# Errors after which replaying the checkpoint on a fresh connection is safe (the INSERT
+# is atomic): Garage or Postgres down; DuckLake's commit retries exhausted while another
+# writer (dbt, maintenance) takes the lake-wide snapshot ids; DuckLake's internal error
+# when a scan of inlined rows races a flush, which invalidates the whole DuckDB instance
 RECOVERABLE_ERRORS = (
     duckdb.IOException,
     duckdb.HTTPException,
     duckdb.ConnectionException,
+    duckdb.TransactionException,
     duckdb.InternalException,
     duckdb.FatalException,
 )
@@ -91,26 +92,17 @@ def arrow_table_from_batches(batches: list[SinkBatch], processed_at: datetime) -
 
 
 class DuckLakeBronzeSink(BatchingSink):
-    """Writes each Quix checkpoint to DuckLake Bronze as one transaction.
+    """Writes each Quix checkpoint to DuckLake Bronze as one transaction (one Parquet file
+    per day partition touched)."""
 
-    Live checkpoints stay below the inlining limit and land in the Postgres catalog;
-    every `inlined_flush_interval` seconds the sink moves them to Parquet (decision D15).
-    """
-
-    def __init__(
-        self,
-        settings: DuckLakeSettings | None = None,
-        inlined_flush_interval: float = config.DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS,
-    ) -> None:
+    def __init__(self, settings: DuckLakeSettings | None = None) -> None:
         super().__init__()
         self._settings = settings or DuckLakeSettings()
         self._table = f"{self._settings.alias}.main.{BRONZE_TABLE}"
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._inlined_flush_interval = inlined_flush_interval
-        self._last_inlined_flush = time.monotonic()
 
     def setup(self) -> None:
-        """Attach the lake, set write options, create and partition Bronze, flush leftovers.
+        """Attach the lake, set write options, create and partition Bronze.
 
         Options and partitioning only apply to files written afterwards, so they must be
         in place before the first insert (decision D14).
@@ -119,8 +111,6 @@ class DuckLakeBronzeSink(BatchingSink):
         set_write_options(conn, self._settings.alias)
         conn.execute(duckdb_ddl(self._table))
         conn.execute(duckdb_partition_ddl(self._table))
-        # Rows left inlined by the previous run (stopped before its next flush)
-        self._flush_inlined()
 
     def _connection(self) -> duckdb.DuckDBPyConnection:
         """Current connection, reopened after a storage or catalog failure."""
@@ -140,38 +130,6 @@ class DuckLakeBronzeSink(BatchingSink):
                 self._insert(batches)
         finally:
             self._batches.clear()
-        if time.monotonic() - self._last_inlined_flush >= self._inlined_flush_interval:
-            self._flush_inlined()
-
-    def _flush_inlined(self) -> None:
-        """Move inlined rows from the catalog to Parquet files (one per day partition).
-
-        Runs after the checkpoint insert succeeded, so a failure here must not raise
-        SinkBackpressureError: Quix would replay an already written checkpoint. The rows
-        are safe in Postgres and the next checkpoint retries the flush.
-        """
-        self._last_inlined_flush = time.monotonic()
-        alias, schema, table = self._table.split(".")
-        started = time.perf_counter()
-        try:
-            flushed = (
-                self._connection()
-                .execute(
-                    f"CALL ducklake_flush_inlined_data({sql_literal(alias)}, "
-                    f"schema_name => {sql_literal(schema)}, table_name => {sql_literal(table)})"
-                )
-                .fetchall()
-            )
-        except RECOVERABLE_ERRORS as e:
-            logger.warning(f"Inlined data flush failed ({e}), retrying at the next checkpoint")
-            self._close()
-            # -inf, not 0: monotonic() counts from boot, so 0 is less than one interval
-            # ago on a host that started recently and the retry would wait
-            self._last_inlined_flush = float("-inf")
-            return
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        rows = sum(row[-1] for row in flushed)
-        logger.info(f"Inlined flush: {rows} rows moved to Parquet in {elapsed_ms:.0f} ms")
 
     def _insert(self, batches: list[SinkBatch]) -> None:
         processed_at = datetime.now(UTC)
@@ -188,7 +146,7 @@ class DuckLakeBronzeSink(BatchingSink):
             finally:
                 conn.unregister("bronze_batch")
         except RECOVERABLE_ERRORS as e:
-            # Garage or Postgres unavailable: offsets are not committed, Quix pauses and
+            # Offsets are not committed: Quix pauses and
             # seeks back to the checkpoint start, then retries with a fresh connection
             logger.warning(
                 f"DuckLake write failed ({e}), retrying in {BACKPRESSURE_RETRY_SECONDS}s"
