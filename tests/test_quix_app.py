@@ -3,6 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
+import duckdb
 import pytest
 from quixstreams.sinks import SinkBatch
 
@@ -46,6 +47,57 @@ def test_arrow_table_matches_bronze_schema() -> None:
     assert table.num_rows == 3
 
 
+class _FakeConnection:
+    """Records executed SQL; raises the given error on flush calls if set."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.statements: list[str] = []
+        self.error = error
+
+    def execute(self, sql: str) -> "_FakeConnection":
+        self.statements.append(sql)
+        if self.error is not None and "ducklake_flush_inlined_data" in sql:
+            raise self.error
+        return self
+
+    def fetchall(self) -> list[tuple]:
+        return [("main", "bronze_events", 0)]
+
+    def close(self) -> None:
+        pass
+
+
+def _sink_with(conn: _FakeConnection, interval: float) -> DuckLakeBronzeSink:
+    sink = DuckLakeBronzeSink(DuckLakeSettings(), inlined_flush_interval=interval)
+    sink._conn = conn  # type: ignore[assignment]
+    return sink
+
+
+def test_inlined_flush_waits_for_the_interval() -> None:
+    """No flush before the interval, one flush of the Bronze table once it elapsed."""
+    conn = _FakeConnection()
+    sink = _sink_with(conn, interval=3600)
+    sink.flush()
+    assert conn.statements == []
+    sink._last_inlined_flush -= 3600
+    sink.flush()
+    assert conn.statements == [
+        "CALL ducklake_flush_inlined_data('lake', "
+        "schema_name => 'main', table_name => 'bronze_events')"
+    ]
+
+
+def test_inlined_flush_failure_does_not_block_the_checkpoint() -> None:
+    """A failed flush is logged, not raised (no replay), and retried at the next one."""
+    sink = _sink_with(_FakeConnection(duckdb.IOException("garage down")), interval=3600)
+    sink._last_inlined_flush -= 3600
+    sink.flush()  # must not raise SinkBackpressureError
+    assert sink._conn is None  # reconnects on the next write
+    sink._conn = _FakeConnection()  # type: ignore[assignment]
+    sink.flush()
+    assert sink._conn.statements  # retried without waiting another interval
+
+
 @pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")
 def test_sink_writes_all_partitions_in_one_snapshot() -> None:
     """flush() writes every partition of a checkpoint as a single DuckLake snapshot."""
@@ -73,10 +125,11 @@ def test_sink_writes_all_partitions_in_one_snapshot() -> None:
 
 
 @pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")
-def test_sink_writes_zstd_files_split_by_utc_day() -> None:
-    """Events on both sides of midnight UTC land in two day folders, zstd-compressed."""
+def test_sink_inlines_then_flushes_zstd_files_split_by_utc_day() -> None:
+    """A live checkpoint stays in the catalog until the inlined flush, which writes one
+    zstd file per UTC day (events on both sides of midnight UTC)."""
     table = f"test_bronze_{uuid.uuid4().hex[:8]}"
-    sink = DuckLakeBronzeSink(DuckLakeSettings())
+    sink = DuckLakeBronzeSink(DuckLakeSettings(), inlined_flush_interval=3600)
     sink._table = f"lake.main.{table}"
     sink.setup()
     sink.setup()  # restart: options and partitioning are re-applied without error
@@ -84,16 +137,15 @@ def test_sink_writes_zstd_files_split_by_utc_day() -> None:
     try:
         # 23:30 UTC is already the next day in Europe/Paris: UTC must win
         for partition, time in ((0, "2026-09-25T23:30:00Z"), (1, "2026-09-26T00:30:00Z")):
-            # Above the inlining limit, so the insert writes Parquet files
             for item in _batch(partition, list(range(20)), time=time):
                 sink.add(item.value, None, 0, [], "raw_events", partition, item.offset)
         sink.flush()
-        files = [
-            row[0]
-            for row in conn.execute(
-                f"SELECT data_file FROM ducklake_list_files('lake', '{table}')"
-            ).fetchall()
-        ]
+        list_files = f"SELECT data_file FROM ducklake_list_files('lake', '{table}')"
+        assert conn.execute(list_files).fetchall() == []  # inlined, readable already
+        assert conn.execute(f"SELECT count(*) FROM lake.main.{table}").fetchone() == (40,)
+        sink._flush_inlined()
+        files = [row[0] for row in conn.execute(list_files).fetchall()]
+        assert conn.execute(f"SELECT count(*) FROM lake.main.{table}").fetchone() == (40,)
         assert sorted(f.split(f"/{table}/")[1].rsplit("/", 1)[0] for f in files) == [
             "year=2026/month=9/day=25",
             "year=2026/month=9/day=26",
