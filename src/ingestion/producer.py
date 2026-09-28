@@ -98,12 +98,7 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 60.0, jitter: fl
 
 def kafka_base_config(bootstrap_servers: str) -> dict[str, str]:
     """Settings shared by every librdkafka client (admin, consumer, producer)."""
-    return {
-        "bootstrap.servers": bootstrap_servers,
-        # Redpanda only listens on IPv4, but `redpanda` (coolify network) and
-        # `localhost` also resolve to IPv6: without this, the first connection fails
-        "broker.address.family": "v4",
-    }
+    return {"bootstrap.servers": bootstrap_servers, **config.KAFKA_CLIENT_CONFIG}
 
 
 def ensure_topic(bootstrap_servers: str) -> None:

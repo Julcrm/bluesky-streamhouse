@@ -21,6 +21,7 @@ producer = [
 quix = [
     "quixstreams>=3.26,<4",
     "duckdb>=1.5,<1.6",
+    "pyarrow>=20",
 ]
 spark = [
     "pyspark==4.1.3",
