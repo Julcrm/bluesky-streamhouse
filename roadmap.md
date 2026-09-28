@@ -3,34 +3,27 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 2 (bilan de 24 h à faire) et 3 en parallèle : 3a Silver et 3b Gold faits en local (65 tests dbt), inlining conservé avec une limite de 5 000 lignes (D15 final) et un catalogue DuckLake par writer (D22), reste 3c Dagster et 3d maintenance
-**Dernière mise à jour :** 2026-09-28 (soir, fin de session)
+**Phase en cours :** 3 — phase 2 close (migration D22 faite en prod le 2026-09-28 au soir) ; 3a Silver et 3b Gold faits en local (65 tests dbt), reste 3c Dagster et 3d maintenance
+**Dernière mise à jour :** 2026-09-28 (~22:00 Paris)
 
 > **Prochaine session : commencer ici**
 >
-> **Où on en est (2026-09-28, ~19:45 Paris)** : tout le travail est sur **`feat/phase-3b-split-catalogs`**, poussée, basée sur `feat/phase-3b-gold` (Gold + roadmap `5a2596b`, tout inclus). Contenu : un catalogue DuckLake par writer (D22), inlining conservé à **5 000** + flush 5 min (D15), premier run Silver plafonné, `TransactionException` rejouable. Validé en local (lint, 35 tests, 65 tests dbt sous charge, 0 perte). **Rien n'est déployé** : la prod tourne toujours l'ancien code (un seul catalogue, inlining à 10 000). Aucune PR ouverte. Le commit `1f2cf37` (Parquet direct) est dans l'historique mais annulé par `0c3092a`.
+> **Où on en est (2026-09-28, ~22:00 Paris)** : **la prod tourne le nouveau code** (`main` = `3674934`) : un catalogue DuckLake par writer (D22), Bronze dans le catalogue `bronze` (schéma de métadonnées `bronze`, fichiers sous `ducklake/bronze/`), inlining à 5 000 + flush 5 min (D15). Ancien catalogue supprimé (tables de `public` et fichiers `ducklake/main/`). Bronze rechargé depuis Redpanda (~25 h, depuis le 27/09 ~19:00 UTC), audit **0 doublon, 0 manquant**. Pas encore de Silver/Gold en prod (3c). Branche de travail : `feat/phase-3c-dagster` (depuis `main`).
 >
-> 1. **Bilan sur 24 h de la prod** (à partir du 2026-09-29 ~10:00 UTC, Quix démarré à 09:56 le 28) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation disque de ~60-65 Go), et **latence des `Bronze commit`** : si la prod montre la même dent de scie qu'en local (1,4 s → 20-48 s puis retour à ~0,2 s quand un lot passe en Parquet, voir journal du 28 au soir), le résultat « inlining trop lent à ce débit » est confirmé sur Linux. **Vérifier aussi la limite d'inlining à 5 000** (D15) : débit du producer heure par heure **sur les 24 h, nuit comprise** (pointe US non encore observée ; on n'a que 09:56-18:00 UTC) ; si une heure dépasse ~800 msg/s en moyenne (checkpoint > 4 000 lignes), relever la limite. Commande : `docker logs --since 26h $(docker ps -q --filter name=producer) 2>&1 | grep "msg/s"`. Requête d'audit des offsets (lecture seule) :
+> 1. **Bilan de 24 h du nouveau Bronze** (à partir du 2026-09-29 ~20:00 UTC, Quix redéployé à 19:32:44 UTC le 28) : 0 redémarrage, RAM (pics à ~700 Mio / 768 pendant le rattrapage de 35 M lignes, ~210 Mio en live : **marge faible au rattrapage de 07:00 de la phase 6**), latence des `Bronze commit` inlinés (~1 s attendu) et part des lots en Parquet, **débit du producer heure par heure, nuit comprise, pour valider la limite de 5 000** (relever si une heure dépasse ~800 msg/s en moyenne ; `docker logs --since 26h $(docker ps -q --filter name=producer) 2>&1 | grep "msg/s"`), taille de la base `ducklake_catalog`, B/ligne. Requête d'audit (lecture seule) :
 >    ```bash
 >    Q=$(docker ps -q --filter name=quix)
 >    docker exec $Q /app/.venv/bin/python -c "
 >    from src.resources.ducklake import connect
 >    c = connect(read_only=True)
->    c.execute(\"SET memory_limit='150MB'; SET temp_directory='/tmp/duckdb_audit'\")
+>    c.execute(\"SET enable_progress_bar=false; SET memory_limit='200MB'; SET temp_directory='/tmp/duckdb_audit'; SET threads=1\")
 >    print(c.execute('''SELECT kafka_partition, count(*) AS rows_,
 >      count(*) - count(DISTINCT kafka_offset) AS dup,
 >      max(kafka_offset) - min(kafka_offset) + 1 - count(DISTINCT kafka_offset) AS missing
->      FROM lake.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
+>      FROM bronze.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
 >    ```
 >    Attendu : `missing = 0` sur les 3 partitions. Caster les timestamps en `VARCHAR` (pas de `pytz` dans l'image).
-> 2. **Migration prod vers deux catalogues (D22), après le bilan** — **décidé : on repart propre** (schémas de métadonnées `bronze` et `transform` dans `ducklake_catalog`, chemins `ducklake/bronze/` et `ducklake/transform/`, données actuelles abandonnées). Procédure (actions prod, chacune avec le go de Julien) :
->    1. Bilan + audit des offsets **sur l'ancien catalogue** (`lake.main.bronze_events`), avant toute modification.
->    2. PR `feat/phase-3b-split-catalogs` → `dev` (contient `feat/phase-3b-gold`), mergée ; PR `dev` → `main` prête mais **pas encore mergée**.
->    3. Arrêter **Quix seul** sur l'hôte (le producer continue) : `docker stop $(docker ps -q --filter name=quix)`. Coolify ne le relance pas (arrêt manuel).
->    4. Supprimer le consumer group (refusé tant qu'un membre est actif) : `R=$(docker ps --format '{{.Names}}' | grep -i redpanda | grep -vi console | head -1); docker exec $R rpk group delete branch-b-quix`, vérifier avec `rpk group list`.
->    5. Merger `dev` → `main` : la CI déploie, Coolify recrée producer et Quix. Même nom de groupe, sans offsets → `QUIX_AUTO_OFFSET_RESET = earliest` : Quix **repart du plus ancien message de Redpanda (~24 h)**, rattrapage en lots Parquet de 50 000 (~39 M messages, ~30 min estimées, RAM ~280 Mo / 768 Mo).
->    6. Vérifier : schéma `bronze` créé dans `ducklake_catalog` ; fichiers sous `ducklake/bronze/` ; `rpk group describe branch-b-quix` → lag qui revient à 0 ; audit sur **`bronze.main.bronze_events`** (`missing = 0`) ; en live, commits inlinés ~1 s et `Inlined flush` toutes les 5 min.
->    7. **Nettoyage de l'ancien catalogue, sans traîner** (le lendemain au plus tard) : lister puis supprimer les tables `ducklake_*` du schéma `public` de `ducklake_catalog`, puis les fichiers `ducklake/main/` sur Garage. **Jamais d'ATTACH en écriture ni de `CHECKPOINT` sur l'ancien catalogue d'ici là** : son `DATA_PATH` (`ducklake/`) englobe `ducklake/bronze/`, il effacerait le nouveau Bronze comme fichiers orphelins.
+> 2. ~~Migration prod vers deux catalogues (D22)~~ : **faite le 2026-09-28 au soir**, voir journal.
 > 3. **3c Dagster** : code location `bluesky_duckdb` (D20) dans le `dagster-workspace` partagé, `dagster-dbt`, job de 15 min Silver → Gold **relancé en boucle tant que Silver a du retard** (plafond de 500 k lignes Bronze par run), `RetryPolicy`, image Docker avec le manifest dbt compilé, **2 ATTACH** dans le profil (D22). Mesurer en prod la latence de Quix pendant les runs dbt.
 > 4. **3d maintenance** : `DELETE` de rétention + `CHECKPOINT` (D21) **sur chaque catalogue** (D22), garde-fou D16, alertes 80 Go / catalogue 2 Go.
 >
@@ -253,7 +246,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
-**État au 2026-09-28 :** Bronze se remplit en prod (inlining + flush OK) ; audit des offsets après les redémarrages de déploiement à faire.
+**État au 2026-09-28 :** **phase 2 close le 2026-09-28 au soir** : ~12 h sur l'ancien catalogue sans trou (audit 0 manquant / 0 doublon sur 51,5 M lignes), puis migration vers le catalogue `bronze` (D22) avec le même résultat.
 
 ### Phase 3 — Branche B : dbt-duckdb (Silver / Gold) + Dagster
 **Objectif :** medallion complet sur la branche B, orchestré.
@@ -265,6 +258,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] **3c — Dagster** (D20) : code location `bluesky_duckdb` (code server gRPC, image sans JVM, limite 1,5 Go) déclarée dans le `workspace.yaml` du `dagster-workspace` ; `dagster-dbt` ; `quix_bronze` observable ; job de 15 min = Silver → Gold (le flush de l'inlining reste dans le sink Quix, D15) ; profil dbt à 2 catalogues (D22) ; **Silver relancé en boucle dans un même run tant que `bronze_snapshot_id` < snapshot courant** (plafond de 500 k lignes par run : rattrapage de 07:00) ; mesurer en prod la latence de Quix pendant les runs dbt (plus de conflit depuis D22 ; reste le coût propre de l'inlining, D15) ; **`RetryPolicy` sur les assets qui lisent Bronze** (bug DuckLake : un scan de données inlinées qui croise un flush peut invalider l'instance DuckDB, un nouveau run repart proprement)
 - [x] **Un catalogue par writer** (D22, 2026-09-28, branche `feat/phase-3b-split-catalogs`) : `bronze` / `transform`, validé en local sous charge ; migration prod après le bilan
 - [x] **Premier run Silver plafonné** (2026-09-28) : il lisait tout Bronze sans plafond (OOM à 1 Go sur 2,2 M lignes, et des dizaines de millions en prod) ; il part maintenant du plus ancien snapshot conservé avec le même plafond de 500 k lignes. Limite : après expiration des snapshots, les lignes antérieures arrivent en un seul lot (un `--full-refresh` après expiration n'est pas plafonné)
+- [x] **Migration prod D22** (2026-09-28 au soir) : catalogue `bronze` en prod, ancien catalogue supprimé, Bronze rechargé depuis Redpanda, audit 0 doublon / 0 manquant
 - [ ] **3d — Maintenance** (D21) : `maintenance/ducklake.py` (`DELETE` de rétention, `CHECKPOINT` de chaque catalogue (D22), garde-fou D16, `CHECKPOINT` avec relances, métadonnées avant/après, purge des runs Dagster > 30 j), constantes `BRONZE_RETENTION_DAYS` etc. dans `config.py` (mêmes noms que velib), schedule à 2 h (Europe/Paris)
 - [ ] Asset checks 80 Go (listing S3) et catalogue < 2 Go, sensor d'échec avec alerte mail (Resend)
 
@@ -541,3 +535,12 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Prod vérifiée le soir même** (logs en lecture seule, 09:56-18:00 UTC) : débit moyen 226-560 msg/s selon l'heure (pics brefs à 2 000-3 400 msg/s), checkpoints de 1 100 à 2 800 lignes. Commits inlinés **p50 0,9 s, p95 1,5 s**, 0 `WARN` ; 42 sur 4 649 au-delà de 5 s, tous après une rafale (lots de 5 000 à 10 000 lignes, jusqu'à 20 s). **Correction de ma conclusion locale** : l'inlining tient le flux normal en prod ; ce sont les gros lots qu'il gère mal, et la dent de scie locale était surtout un effet de Postgres sous Docker Desktop.
 - **Limite d'inlining passée à 5 000** (décision de Julien) : ~2 fois la taille des checkpoints normaux, sous les lots de rafale, qui partent en Parquet direct. À vérifier avec le débit de nuit au bilan.
 - **Suite** : bilan de 24 h (latence des `Bronze commit` et débit de nuit en plus), choix de migration prod (D22), PR, puis 3c.
+
+### 2026-09-28 (nuit) — Migration de la prod vers deux catalogues (D22)
+- **Relevé de l'ancien catalogue avant suppression** (09:56 → 19:30 UTC, inlining à 10 000, un seul catalogue) : **51,5 M lignes, 0 doublon, 0 offset manquant** ; 1 538 fichiers, 6,64 Go, **~129 B/ligne** (estimation D14 : 121-126) ; Quix 0 redémarrage, 395 / 768 Mio, 114 flush, 0 `WARN` ; catalogue Postgres 81 Mo. Le bilan de 24 h prévu sur cette config est remplacé par ce relevé (décision de Julien : migrer tout de suite, « on met tout au propre »).
+- **Git** : `feat/phase-3b-split-catalogs` mergée dans `dev` (`c68e873`), puis `dev` dans `main` (`3674934`), merges locaux `--no-ff` (pas de `gh`). CI + déploiement Coolify à 19:32:44 UTC.
+- **Procédure** : Quix arrêté seul (`docker stop`, le producer a continué), consumer group `branch-b-quix` supprimé (`rpk group delete`), déploiement : même nom de groupe sans offsets + `earliest` → **rechargement de tout Redpanda** (depuis le 27/09 ~19:00 UTC, ~25 h). Nouveau catalogue créé à l'ATTACH (schéma de métadonnées `bronze`, `DATA_PATH` `ducklake/bronze/`).
+- **Rattrapage** : 35,3 M lignes en ~18 min (~33 000 msg/s, lots Parquet de 50 000), 0 redémarrage, 0 `WARN`. **RAM de 445 à ~700 Mio sur 768** pendant tout le rattrapage (~280 Mio mesurés en local après un lot) : marge faible, à surveiller pour le rattrapage quotidien de 07:00 (phase 6) ; piste si besoin : `QUIX_COMMIT_EVERY` plus bas. En live : ~210 Mio.
+- **Audit** sur `bronze.main.bronze_events` : **0 doublon, 0 manquant** sur les 3 partitions, `min(kafka_offset)` = début du log Redpanda (rien de perdu de ce qui était conservé) ; 721 fichiers, 4,58 Go (~130 B/ligne). En live : commits inlinés de 2 300-2 750 lignes en **0,9-1,3 s**.
+- **Nettoyage de l'ancien catalogue** : suppression bloquée par le garde-fou de Claude Code (auto mode, actions destructives en prod) ; faite par Julien dans DataGrip (29 tables `ducklake_*` de `public`, dossier `ducklake/main/`). Vérifié : seul le schéma `bronze` reste, seul `ducklake/bronze/` reste sur Garage, **603 fichiers suivis = 603 objets** dans le bucket.
+- **Suite** : 3c Dagster sur `feat/phase-3c-dagster` (point de conception d'abord) ; bilan de 24 h du nouveau Bronze le 29 au soir.
