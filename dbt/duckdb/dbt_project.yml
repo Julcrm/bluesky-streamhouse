@@ -12,6 +12,10 @@ vars:
   # Bronze rows read per Silver run (all collections). ~300k posts in one batch overflowed
   # 1 GB; 500k Bronze rows is ~130k posts on a post-heavy mix (~55k on the prod mix)
   silver_max_rows_per_run: 500000
+  # Hashtags kept per hour in gold_hashtags_hour (D19)
+  gold_top_hashtags: 50
+  # Hours recomputed from Silver by assert_gold_matches_silver
+  gold_check_window: "INTERVAL 3 HOUR"
   # Uniqueness tests only scan recent rows: a full 7-day scan every 15 min is too costly
   recent_rows_window: "INTERVAL 1 DAY"
 
@@ -24,3 +28,11 @@ models:
       +materialized: incremental
       +incremental_strategy: append
       +partitioned_by: ["year(event_time)", "month(event_time)", "day(event_time)"]
+    gold:
+      +schema: gold
+      # Rebuild the hours touched by new Silver rows (D19): every row of a rebuilt hour
+      # is deleted then inserted again, so a hashtag leaving the top 50 disappears
+      +materialized: incremental
+      +incremental_strategy: delete+insert
+      +unique_key: hour
+      +partitioned_by: ["year(hour)", "month(hour)", "day(hour)"]
