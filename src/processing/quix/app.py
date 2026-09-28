@@ -154,7 +154,9 @@ class DuckLakeBronzeSink(BatchingSink):
         except (duckdb.IOException, duckdb.HTTPException, duckdb.ConnectionException) as e:
             logger.warning(f"Inlined data flush failed ({e}), retrying at the next checkpoint")
             self._close()
-            self._last_inlined_flush = 0.0
+            # -inf, not 0: monotonic() counts from boot, so 0 is less than one interval
+            # ago on a host that started recently and the retry would wait
+            self._last_inlined_flush = float("-inf")
             return
         elapsed_ms = (time.perf_counter() - started) * 1000
         rows = sum(row[-1] for row in flushed)
