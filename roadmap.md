@@ -20,7 +20,7 @@
 >    ```
 >    Attendu : `missing = 0` sur les 3 partitions (quelques `dup` tolérés, retirés en Silver).
 > 2. **Bilan sur 24 h** (pas avant le 2026-09-29 ~10:00 UTC, déploiement du correctif à 09:56) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
-> 3. Si tout est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb Silver/Gold + Dagster, maintenance DuckLake avec la rétention D14).
+> 3. Si tout est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb Silver/Gold + Dagster, maintenance DuckLake avec la rétention D14). Brainstorm en cours : D16 et D17 tranchés ; restent la gestion des `delete` (Silver en journal d'événements ?), la fréquence Silver/Gold (15 min ou 1 h), Dagster (code location dans le `dagster-workspace` partagé, run launcher à vérifier pour la JVM de la phase 5), la maintenance (étapes explicites ou `CHECKPOINT`) et le découpage 3a-3d.
 > 4. Pousser les commits de doc restés en local sur `feat/phase-2-quix-ducklake`.
 >
 > Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). Entre 08:53 et 09:55 UTC le 2026-09-28, la prod a tourné sans inlining : petits fichiers dans Bronze, repris par la fusion de fichiers de la phase 3.
@@ -50,6 +50,20 @@ dbt-spark                              dbt-duckdb
 
 **Question posée par le projet :** pour le même flux temps réel, que coûte (CPU, RAM, stockage, latence,
 complexité opérationnelle) une stack JVM « enterprise » face à une stack zero-JVM moderne ?
+
+---
+
+## Règle du benchmark : parité du contrat, pas des mécanismes
+
+**Parité obligatoire sur le contrat**, sinon la comparaison n'est pas honnête :
+- mêmes entrées (topic `raw_events`, même journée 19:00 → 19:00) ;
+- mêmes sorties : tables Silver/Gold aux mêmes noms, mêmes colonnes, **même sens des métriques** (une métrique exacte l'est dans les deux branches) ;
+- mêmes tests dbt, mêmes garanties (0 perte, doublons retirés en Silver) ;
+- mêmes limites CPU/RAM Docker et même fraîcheur des données.
+
+**Liberté totale sur les mécanismes** : chaque stack est configurée **à son meilleur** et utilise ses fonctions natives, même si l'autre stack n'a pas d'équivalent (ex. : data inlining DuckLake D15, flux de changements DuckLake D16). On ne bride jamais une techno pour copier l'autre : l'écart est **un résultat du benchmark**, pas un biais à corriger. La règle vaut dans les deux sens (Spark/Iceberg auront droit à leurs propres atouts en phases 4-5).
+
+**Contrepartie** : le coût de chaque avantage (code sur mesure, pièges, maintenance, coût caché comme Postgres pour l'inlining) est mesuré ou noté, car la complexité opérationnelle fait partie de la question du projet.
 
 ---
 
@@ -160,6 +174,8 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D13 | Contrat Bronze (commun aux deux branches) | Enveloppe typée + `record` JSON · message brut seul · une table par collection | Table unique `bronze_events` : `seq, did, collection, operation, rkey, rev, cid, event_time, record` (JSON), `kafka_partition, kafka_offset, processed_at`. **Append-only**, dédoublonnage en Silver sur `seq`. **1 commit par checkpoint** (toutes partitions dans un INSERT), plafonné à 50 000 messages en rattrapage (`commit_every`, même plafond côté Spark via `maxOffsetsPerTrigger`) | **tranché le 2026-09-26**, défini dans `src/processing/bronze.py` |
 | D14 | Rétention et volumétrie | Tout garder · N jours par couche · alternance seule | Budget disque **≤ 100 Go** (autres projets sur le VPS). **Bronze 7 j, Silver 7 j, Gold 30 j**, benchmark (`benchmark_windows`, `branch_calendar`) conservé, Redpanda **24 h**. Parquet en **zstd** (DuckLake écrit en Snappy par défaut : 213 → 121 B/ligne), Bronze et Silver **découpés par jour** (sinon un DELETE n'efface aucun fichier). Nettoyage quotidien à **2 h** (hors 07:00-19:00) : DELETE → `expire_snapshots` → `cleanup_old_files` (jamais de `rm` direct sur Garage, contrairement à velib). **Asset check Dagster : alerte mail à 80 Go** sur le bucket. Estimation en régime stable : **~55 Go** (≤ 70 Go avec 30 % de marge) | **tranché le 2026-09-26** |
 | D15 | Data inlining DuckLake (branche B) | Limite 10 (défaut, petits fichiers + fusion a posteriori, comme Iceberg) · limite ~10 000 + flush | **Chaque stack configurée à son meilleur** : l'inlining est la réponse de DuckLake au streaming, on ne le bride pas pour copier Iceberg. Limite **10 000** (au-dessus d'un checkpoint live ~2-3 k lignes, sous un lot de rattrapage de 50 k : le rattrapage écrit du Parquet direct). **Flush dans le sink** toutes les **5 min** (pas de conflit d'écriture avec Quix, coût compté dans le conteneur B), + flush au démarrage. Condition : mesurer le coût côté Postgres (base `ducklake_catalog`) en phase 7, sinon B paraît artificiellement légère | **tranché le 2026-09-28** |
+| D16 | Silver incrémental (branche B) | (a) repère sur `processed_at` + recouvrement · (b) flux de changements DuckLake (`ducklake_table_changes` / `ducklake_table_insertions`) entre le dernier snapshot traité et le snapshot courant · (c) `delete+insert` du jour | **(b)**, fonction native de DuckLake (règle « parité du contrat, pas des mécanismes ») : exact, sans recouvrement, lit seulement les fichiers et lignes inlinées ajoutés. Dédoublonnage sur `seq` contre le Silver récent conservé (un rejeu après crash arrive dans un snapshot plus récent). Dernier snapshot traité stocké côté Silver ; asset check : `expire_snapshots` ne doit jamais dépasser ce snapshot. **Sous réserve d'un test local** (lignes inlinées vues une seule fois malgré le flush, comportement après `merge_adjacent_files`, macro dbt) ; si ça casse, retour à (a) avec la raison au journal | **tranché le 2026-09-28** |
+| D17 | Utilisateurs distincts en Gold | `count(DISTINCT)` exact · HyperLogLog natif avec tolérance ±2 % | **Exact** : c'est le contrat de la métrique (pas un mécanisme), identique dans les deux branches ; chaque stack le calcule comme elle veut. Coût faible au grain horaire | **tranché le 2026-09-28** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -222,8 +238,9 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 ### Phase 3 — Branche B : dbt-duckdb (Silver / Gold) + Dagster
 **Objectif :** medallion complet sur la branche B, orchestré.
 
-- [ ] Silver : typage par collection (`posts`, `likes`, `reposts`, `follows`), dédoublonnage, gestion des `delete`
-- [ ] Gold : posts/minute, langues (`langs`), hashtags (facets), utilisateurs actifs, engagement
+- [ ] Test local du flux de changements DuckLake (D16) : lignes inlinées, flush, `merge_adjacent_files`, macro dbt
+- [ ] Silver : typage par collection (`posts`, `likes`, `reposts`, `follows`), incrémental par snapshots (D16), dédoublonnage sur `seq`, gestion des `delete`
+- [ ] Gold : posts/minute, langues (`langs`), hashtags (facets), utilisateurs actifs (`count(DISTINCT)` exact, D17), engagement
 - [ ] Tests dbt : `schema.yml` et `assert_*.sql`
 - [ ] Assets Dagster : `quix_bronze` (observable), `duckdb_silver`, `duckdb_gold`
 - [ ] `maintenance/ducklake.py` : flush inlined, merge adjacent files, **rétention D14** (DELETE des jours expirés : Bronze/Silver 7 j, Gold 30 j), expire snapshots, cleanup old files. Constantes `BRONZE_RETENTION_DAYS` etc. dans `config.py` (mêmes noms que velib)
@@ -430,7 +447,8 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - La **PR #7 visait `main`** (et non `dev`) et a été mergée avant le commit D15 : déploiement à 08:53 UTC avec D14 seulement, donc sans inlining pendant ~50 min. `dev` réaligné sur `main`, puis D15 mergé `feat` → `dev` → `main`.
 - **CI rouge sur D15** : le retry d'un flush raté remettait `_last_inlined_flush` à `0.0`, or `time.monotonic()` compte depuis le démarrage de la machine. Sur un runner GitHub démarré depuis moins d'une heure, le retry attendait tout un intervalle (même risque sur un VPS qui vient de redémarrer). Passé sur mon Mac, qui tournait depuis des jours. Corrigé avec `float("-inf")`, diagnostic confirmé en simulant `monotonic() = 100`.
 - **Déployé le 2026-09-28 à 09:42 UTC** (`e6cfe7e`) : CI verte, déploiement Coolify OK. Contrôle de la prod à faire.
-- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
+- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.
+- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
 - **Correctif** : `DUCKLAKE_DATA_INLINING_ROW_LIMIT` et `QUIX_AUTO_OFFSET_RESET` retirés du compose (valeurs dans `config.py` seulement, réglages de benchmark versionnés) et supprimés dans Coolify par Julien. Règle : pas de `${VAR:-défaut}` dans le compose pour un réglage qui doit suivre le code.
 - En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
 - **Contrôle après correctif (10:01 UTC)** : variable absente de l'environnement, limite lue = 10 000 (`/app/.venv/bin/python`, le `python` système de l'image n'a pas les dépendances). **INSERT inliné en prod : 350-640 ms (~450 ms)** par checkpoint de ~1 350 lignes, contre ~50 ms en Parquet direct (×9) ; le checkpoint s'étire de ~5,1 à ~5,5 s. **Flush : 70 842 lignes en 1,34 s** toutes les 5 min. Coût à reporter dans le benchmark face au gain en fichiers (1 fichier par jour et par flush au lieu de ~55).
@@ -442,3 +460,10 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Pièges de la requête d'audit** : DuckDB déborde sur disque dans `.tmp` du répertoire courant (`/app`, non inscriptible par `appuser`), d'où `temp_directory` dans `/tmp` + `memory_limit` pour ne pas faire tomber le conteneur de prod (limite 768 Mo) ; lire un `TIMESTAMPTZ` depuis Python exige `pytz`, absent de l'image, d'où le cast en `VARCHAR`.
 - **Reste pour clore la phase 2** : bilan sur 24 h (le 2026-09-29).
 
+
+### 2026-09-28 — Brainstorm phase 3 (1/2)
+- **Règle du benchmark actée** (section dédiée en tête) : **parité du contrat** (entrées, tables et colonnes Silver/Gold, sens des métriques, tests dbt, garanties, limites CPU/RAM, fraîcheur), **liberté des mécanismes** : chaque stack utilise ses avantages natifs, on ne bride jamais une techno pour copier l'autre. Le coût de chaque avantage est mesuré ou noté (complexité opérationnelle). Généralise la logique de D15.
+- **D16 tranché : Silver incrémental par le flux de changements DuckLake** (et non un repère sur `processed_at` choisi d'abord « pour la parité avec dbt-spark »). Sous réserve d'un test local (inlining + flush, fusion de fichiers, macro dbt).
+- **D17 tranché : `count(DISTINCT)` exact** pour les utilisateurs actifs : c'est une question de contrat de la métrique, pas de mécanisme.
+- Contexte vérifié : un `dagster-workspace` partagé tourne déjà sur le VPS (velib y est une code location). Estimation disque phase 3 : Bronze 7 j ~33 Go (126 B/ligne × 37 M/jour, au-dessus des 25 Go de D14), Silver 7 j ~20-23 Go (à mesurer), Gold < 1 Go, pic de fusion ~5 Go : **~60-65 Go**, sous l'alerte de 80 Go.
+- **Suite du brainstorm** : `delete` (point 2), fréquence Silver/Gold, Dagster, maintenance, découpage 3a-3d.
