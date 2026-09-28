@@ -77,6 +77,13 @@ def test_setup_attach_options() -> None:
     assert attach_ro.endswith(", READ_ONLY)")
 
 
+def test_setup_pins_utc_before_attach() -> None:
+    """The session runs in UTC before the lake is attached (partition day values)."""
+    statements = setup_statements(SETTINGS)
+    attach_at = next(i for i, s in enumerate(statements) if s.startswith("ATTACH"))
+    assert statements.index("SET TimeZone = 'UTC'") < attach_at
+
+
 def _local_stack_up() -> bool:
     """True when the local Postgres catalog is reachable and S3 credentials are set."""
     if not (config.POSTGRES_USER and config.S3_ACCESS_KEY_ID):

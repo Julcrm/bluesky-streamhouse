@@ -6,6 +6,7 @@ from src.processing.bronze import (
     BRONZE_COLUMN_NAMES,
     BronzeEvent,
     duckdb_ddl,
+    duckdb_partition_ddl,
     parse_bronze_event,
 )
 
@@ -75,3 +76,11 @@ def test_ddl_lists_every_column_in_order() -> None:
     positions = [ddl.index(f"    {name} ") for name in BRONZE_COLUMN_NAMES]
     assert positions == sorted(positions)
     assert ddl.startswith("CREATE TABLE IF NOT EXISTS lake.main.bronze_events")
+
+
+def test_partition_ddl_splits_by_event_day() -> None:
+    """Bronze files are split by year/month/day of the event time (D14 retention)."""
+    assert duckdb_partition_ddl("lake.main.bronze_events") == (
+        "ALTER TABLE lake.main.bronze_events SET PARTITIONED BY "
+        "(year(event_time), month(event_time), day(event_time))"
+    )

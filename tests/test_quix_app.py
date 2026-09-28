@@ -20,11 +20,11 @@ from tests.test_resources_ducklake import _local_stack_up
 PROCESSED_AT = datetime(2026, 9, 26, 1, 0, tzinfo=UTC)
 
 
-def _batch(partition: int, offsets: list[int]) -> SinkBatch:
+def _batch(partition: int, offsets: list[int], time: str = "2026-09-25T23:09:22Z") -> SinkBatch:
     """A sink batch holding one parsed event per offset (seq = offset)."""
     batch = SinkBatch(topic="raw_events", partition=partition)
     for offset in offsets:
-        event = parse_bronze_event(_message(seq=offset))
+        event = parse_bronze_event(_message(seq=offset, time=time))
         batch.append(value=event, key=None, timestamp=0, headers=[], offset=offset)
     return batch
 
@@ -66,6 +66,42 @@ def test_sink_writes_all_partitions_in_one_snapshot() -> None:
         ).fetchone()
         assert rows == (6, 3)
         assert after[0] == before[0] + 1
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS lake.main.{table}")
+        conn.close()
+        sink._close()
+
+
+@pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")
+def test_sink_writes_zstd_files_split_by_utc_day() -> None:
+    """Events on both sides of midnight UTC land in two day folders, zstd-compressed."""
+    table = f"test_bronze_{uuid.uuid4().hex[:8]}"
+    sink = DuckLakeBronzeSink(DuckLakeSettings())
+    sink._table = f"lake.main.{table}"
+    sink.setup()
+    sink.setup()  # restart: options and partitioning are re-applied without error
+    conn = connect()
+    try:
+        # 23:30 UTC is already the next day in Europe/Paris: UTC must win
+        for partition, time in ((0, "2026-09-25T23:30:00Z"), (1, "2026-09-26T00:30:00Z")):
+            # Above the inlining limit, so the insert writes Parquet files
+            for item in _batch(partition, list(range(20)), time=time):
+                sink.add(item.value, None, 0, [], "raw_events", partition, item.offset)
+        sink.flush()
+        files = [
+            row[0]
+            for row in conn.execute(
+                f"SELECT data_file FROM ducklake_list_files('lake', '{table}')"
+            ).fetchall()
+        ]
+        assert sorted(f.split(f"/{table}/")[1].rsplit("/", 1)[0] for f in files) == [
+            "year=2026/month=9/day=25",
+            "year=2026/month=9/day=26",
+        ]
+        codecs = conn.execute(
+            "SELECT DISTINCT compression FROM parquet_metadata($files)", {"files": files}
+        ).fetchall()
+        assert codecs == [("ZSTD",)]
     finally:
         conn.execute(f"DROP TABLE IF EXISTS lake.main.{table}")
         conn.close()

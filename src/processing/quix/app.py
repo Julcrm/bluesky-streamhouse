@@ -25,9 +25,10 @@ from src.processing.bronze import (
     BRONZE_TABLE,
     BronzeEvent,
     duckdb_ddl,
+    duckdb_partition_ddl,
     parse_bronze_event,
 )
-from src.resources.ducklake import DuckLakeSettings, connect
+from src.resources.ducklake import DuckLakeSettings, connect, set_write_options
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
@@ -84,8 +85,15 @@ class DuckLakeBronzeSink(BatchingSink):
         self._conn: duckdb.DuckDBPyConnection | None = None
 
     def setup(self) -> None:
-        """Attach the lake and create the Bronze table if needed (called once by Quix)."""
-        self._connection().execute(duckdb_ddl(self._table))
+        """Attach the lake, set write options, create and partition Bronze (called once).
+
+        Options and partitioning only apply to files written afterwards, so they must be
+        in place before the first insert (decision D14).
+        """
+        conn = self._connection()
+        set_write_options(conn, self._settings.alias)
+        conn.execute(duckdb_ddl(self._table))
+        conn.execute(duckdb_partition_ddl(self._table))
 
     def _connection(self) -> duckdb.DuckDBPyConnection:
         """Current connection, reopened after a storage or catalog failure."""

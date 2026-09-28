@@ -79,6 +79,9 @@ DUCKLAKE_ALIAS = "lake"
 # Inserts up to this many rows stay in the Postgres catalog until flushed to Parquet.
 # 10 is DuckLake's default, pinned here so the benchmark setting is explicit (phase 2)
 DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "10"))
+# DuckLake writes Snappy by default: zstd cuts Bronze from 213 to 121 B/row (decision D14).
+# Persisted in the catalog, applies to files written afterwards
+DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

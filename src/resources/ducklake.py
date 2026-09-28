@@ -63,6 +63,9 @@ def setup_statements(settings: DuckLakeSettings, read_only: bool = False) -> lis
         attach_options.append("READ_ONLY")
     return [
         *(f"INSTALL {ext}; LOAD {ext};" for ext in EXTENSIONS),
+        # Partition values like day(event_time) follow the session time zone: pin UTC so
+        # a local run (Europe/Paris) files events under the same day as production
+        "SET TimeZone = 'UTC'",
         f"""CREATE SECRET garage (
             TYPE s3, KEY_ID {s(settings.s3_access_key_id)},
             SECRET {s(settings.s3_secret_access_key)}, REGION {s(settings.s3_region)},
@@ -77,6 +80,14 @@ def setup_statements(settings: DuckLakeSettings, read_only: bool = False) -> lis
         f"ATTACH 'ducklake:postgres:' AS {settings.alias} ({', '.join(attach_options)})",
         f"USE {settings.alias}",
     ]
+
+
+def set_write_options(conn: duckdb.DuckDBPyConnection, alias: str = config.DUCKLAKE_ALIAS) -> None:
+    """Persist lake-wide write options in the catalog (idempotent, needs a writable lake)."""
+    conn.execute(
+        f"CALL {alias}.set_option('parquet_compression', "
+        f"{sql_literal(config.DUCKLAKE_PARQUET_COMPRESSION)})"
+    )
 
 
 def connect(

@@ -34,6 +34,10 @@ BRONZE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 
 BRONZE_COLUMN_NAMES = tuple(name for name, _, _ in BRONZE_COLUMNS)
 
+# Files split by event day, so retention DELETEs drop whole files (decision D14).
+# Branch A uses the Iceberg equivalent, days(event_time)
+BRONZE_PARTITION_BY = ("year(event_time)", "month(event_time)", "day(event_time)")
+
 
 @dataclass(frozen=True)
 class BronzeEvent:
@@ -54,6 +58,11 @@ def duckdb_ddl(table: str) -> str:
     """CREATE TABLE statement for the Bronze table in DuckDB/DuckLake."""
     columns = ",\n    ".join(f"{name} {duck}" for name, duck, _ in BRONZE_COLUMNS)
     return f"CREATE TABLE IF NOT EXISTS {table} (\n    {columns}\n)"
+
+
+def duckdb_partition_ddl(table: str) -> str:
+    """Partitioning of the Bronze table in DuckLake (idempotent: no snapshot if unchanged)."""
+    return f"ALTER TABLE {table} SET PARTITIONED BY ({', '.join(BRONZE_PARTITION_BY)})"
 
 
 def parse_bronze_event(message: dict[str, Any]) -> BronzeEvent | None:

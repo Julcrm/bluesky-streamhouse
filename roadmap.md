@@ -4,14 +4,13 @@
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
 **Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze)
-**Dernière mise à jour :** 2026-09-26
+**Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Pousser** `feat/phase-2-quix-ducklake` (7 commits) et ouvrir la PR vers `dev`. **Ne pas merger sur `main`** avant les points 2 et 3 : le merge démarre Quix en prod 24 h/24.
-> 2. **Coder D14 dans le sink** (`setup()` de `DuckLakeBronzeSink`), avant que Bronze se remplisse en prod : `parquet_compression = zstd` (option DuckLake persistée) et découpage par jour de `event_time` (`SET PARTITIONED BY`). Test local : B/ligne et fichiers par jour.
-> 3. **Variables Coolify** de la ressource bluesky-streamhouse : `POSTGRES_HOST=v8kok4w0oscgg0kc4csc88kw`, `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD`, `AWS_ACCESS_KEY_ID=GK833d47708c077296e5a18b3a`, `AWS_SECRET_ACCESS_KEY` (clé `bluesky`, à lire avec `garage key info bluesky --show-secret`).
-> 4. Merge `dev` → `main`, puis contrôle en prod : rattrapage des 24 h du topic, RAM (limite 768 Mo), fichiers sur Garage, 0 offset manquant dans Bronze.
-> 5. Suite de la phase 2 : mesurer l'effet du data inlining (limite 10 vs ~10 000).
+> 1. **Pousser** `feat/phase-2-quix-ducklake` (commit D14 du 2026-09-28) et ouvrir la PR vers `dev`.
+> 2. **Variables Coolify** de la ressource bluesky-streamhouse : `POSTGRES_HOST=v8kok4w0oscgg0kc4csc88kw`, `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD`, `AWS_ACCESS_KEY_ID=GK833d47708c077296e5a18b3a`, `AWS_SECRET_ACCESS_KEY` (clé `bluesky`, à lire avec `garage key info bluesky --show-secret`).
+> 3. Merge `dev` → `main` (démarre Quix en prod 24 h/24), puis contrôle en prod : rattrapage des 24 h du topic, RAM (limite 768 Mo), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, **B/ligne sur 24 h** (valide ou corrige l'estimation D14).
+> 4. Suite de la phase 2 : mesurer l'effet du data inlining (limite 10 vs ~10 000).
 
 ---
 
@@ -200,7 +199,8 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Stack locale : rattrapage et redémarrages en plein flux (SIGTERM et SIGKILL) validés, 0 offset manquant ou en double (voir journal)
 - [x] `docker/quix/Dockerfile` (extensions DuckDB installées au build, chargées sans réseau ; image 208 Mo compressée) + service `quix` dans `docker-compose.yaml` (limite 768 Mo)
 - [x] Rétention et volumétrie décidées (D14)
-- [ ] **Avant de merger sur `main`** : zstd + découpage par jour dans le `setup()` du sink (D14), variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`)
+- [x] zstd + découpage `year/month/day(event_time)` dans le `setup()` du sink (D14), session DuckDB en UTC — 2026-09-28
+- [ ] **Avant de merger sur `main`** : variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`)
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
@@ -393,3 +393,12 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Retenu** : Bronze 7 j (~25 Go), Silver 7 j (~20 Go, estimé), Gold 30 j (< 1 Go), Redpanda 24 h (~6,7 Go) : **~55 Go**. Garde-fou : alerte à 80 Go.
 - velib vérifié : `src/config.py` garde Bronze 7 j, Silver 30 j, Gold 30 j, nettoyage à 2 h par `fs.rm` direct sur S3. Non transposable à DuckLake/Iceberg : le catalogue référencerait des fichiers disparus.
 - **Rien n'est encore codé pour D14** : à faire en tête de la prochaine session, avant le merge sur `main`.
+
+### 2026-09-28 — D14 dans le sink
+- Branche `feat/phase-2-quix-ducklake` bien poussée (à jour avec `origin`).
+- **`setup()` du sink** : `CALL lake.set_option('parquet_compression', 'zstd')` (persisté dans le catalogue, `set_write_options()` dans `resources/ducklake.py`), puis `CREATE TABLE` et `ALTER TABLE … SET PARTITIONED BY (year, month, day(event_time))` (`BRONZE_PARTITION_BY` dans le contrat Bronze). Les deux ne valent que pour les fichiers écrits ensuite.
+- **Idempotent** : un 2e `SET PARTITIONED BY` identique ne crée pas de snapshot, donc aucun effet au redémarrage de Quix.
+- **Piège fuseau horaire** : DuckLake calcule `year/month/day` dans le fuseau de la **session DuckDB**. Sur le Mac (Europe/Paris), un événement de 23:30 UTC tombait dans le jour suivant. `SET TimeZone = 'UTC'` ajouté dans `connect()`, avant l'ATTACH, pour tous les clients (Quix, Dagster, maintenance).
+- **Tests** : unitaires (DDL de partition, UTC avant ATTACH) et intégration du sink (événements de part et d'autre de minuit UTC → `day=25` et `day=26`, codec `ZSTD`, `setup()` rejoué deux fois). Piège : sous la limite d'inlining (10 lignes), rien n'est écrit en Parquet. 30 tests OK avec la stack locale.
+- **Mesure locale** (105 k lignes, 4 min de flux, table repartie de zéro) : 49 fichiers, tous dans `year=2026/month=9/day=28`, tous en ZSTD. Mêmes lignes réécrites en un seul fichier : **Snappy 275 B/ligne, zstd 159 B/ligne (−42 %)**, gain identique à la mesure du 2026-09-26. Fichiers live (0,36 Mo en moyenne) : 168 B/ligne, l'écart sera repris par le merge de fichiers (phase 3).
+- **B/ligne absolu dépendant du mix** : cet échantillon compte 57 % de posts (record moyen 740 caractères) contre ~11 % sur 24 h en prod. D'où 159 B/ligne contre 121 sur un mix riche en likes. Estimation D14 (~55 Go) à valider sur 24 h en prod ; même à 160 B/ligne, Bronze 7 j ≈ 41 Go et le total ≈ 70 Go, sous l'alerte de 80 Go.
