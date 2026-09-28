@@ -12,3 +12,4 @@ build
 .idea
 dbt/*/target
 dbt/*/dbt_packages
+state/

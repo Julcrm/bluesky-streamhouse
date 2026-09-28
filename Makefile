@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -57,6 +57,9 @@ ps:
 # Jetstream -> Redpanda `raw_events` (Ctrl+C flushes and exits)
 produce: check_uv
 	uv run python -m src.ingestion.producer
+
+quix: check_uv
+	uv run python -m src.processing.quix.app
 
 clean:
 	rm -rf .venv

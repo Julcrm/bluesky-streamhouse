@@ -3,15 +3,14 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 1 — Ingestion : Jetstream → Redpanda (run de 24 h validé, clôture à confirmer)
-**Dernière mise à jour :** 2026-09-26
+**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze)
+**Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. ~~Contrôle du run producer~~ : fait le 2026-09-25, voir journal.
-> 2. ~~Secrets CI du repo~~ : configurés par Julien le 2026-09-25. Vérifier au prochain push sur `main` que le job `deploy` passe.
-> 3. **Pousser** `docs/d10-consumer-window` et ouvrir la PR vers `dev`.
-> 4. ~~Correctif IPv4 producer~~ : `broker.address.family=v4` sur les 3 clients librdkafka, branche `fix/producer-ipv4` (vérifié contre Redpanda prod le 2026-09-26, plus d'erreur IPv6).
-> 5. ~~Déséquilibre des partitions~~ : tranché (D11), messages sans clé, branche `fix/producer-ipv4`.
+> 1. **Pousser** `feat/phase-2-quix-ducklake` (commit D14 du 2026-09-28) et ouvrir la PR vers `dev`.
+> 2. **Variables Coolify** de la ressource bluesky-streamhouse : `POSTGRES_HOST=v8kok4w0oscgg0kc4csc88kw`, `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD`, `AWS_ACCESS_KEY_ID=GK833d47708c077296e5a18b3a`, `AWS_SECRET_ACCESS_KEY` (clé `bluesky`, à lire avec `garage key info bluesky --show-secret`).
+> 3. Merge `dev` → `main` (démarre Quix en prod 24 h/24), puis contrôle en prod : rattrapage des 24 h du topic, RAM (limite 768 Mo), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, **B/ligne sur 24 h** (valide ou corrige l'estimation D14).
+> 4. Suite de la phase 2 : mesurer l'effet du data inlining (limite 10 vs ~10 000).
 
 ---
 
@@ -143,8 +142,11 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D7 | Moteur de la branche B | Bytewax · Quix Streams · Pathway · Arroyo | Quix Streams : Apache-2.0, releases actives, natif Kafka/Redpanda, 100 % Python sans JVM (Bytewax est maintenu par la communauté seulement depuis mai 2025, dernière release en nov. 2024) | **tranché le 2026-09-24 : Quix Streams** |
 | D8 | Stockage S3 (MinIO archivé upstream) | Garder MinIO · Garage · SeaweedFS · RustFS | Garage : Rust, binaire unique, porté par une association. Région S3 obligatoire côté clients (`AWS_DEFAULT_REGION=us-east-1`) | **tranché et migré le 2026-09-24** : Garage en prod (ressource Coolify, compose hors de ce repo), MinIO supprimé le 2026-09-24 |
 | D9 | Déploiement de Redpanda | Service Coolify séparé · intégré au compose du projet | Service séparé : infra partagée comme Garage/Postgres, pas coupé par les redéploiements du projet | **tranché le 2026-09-24**, ressource Coolify (compose hors de ce repo) |
-| D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda à passer à **36 h** (marge si un consumer redémarre en retard), à confirmer en phase 6 | **tranché le 2026-09-24** |
+| D10 | Fenêtre de fonctionnement | Tout 24 h/24 · producer 24 h/24 + consumers sur une plage horaire | Producer **24 h/24** (seul point de collecte, ~40 Mo). Branches Spark/Quix de **07:00 à 19:00 (Europe/Paris)**. « Journée » de benchmark = **19:00 (J-1) → 19:00 (J)** : à 07:00, la branche du jour rattrape les ~12 h de nuit, puis traite en temps réel jusqu'à 19:00. Rétention Redpanda : ~~36 h~~ **24 h** (révisé par D14 : le rattrapage de 07:00 ne demande que 12 h) | **tranché le 2026-09-24**, rétention révisée le 2026-09-26 |
 | D11 | Clé des messages `raw_events` | `did` · aucune clé · `seq` · plus de partitions | Aucune clé + sticky partitioner (`sticky.partitioning.linger.ms` = `linger.ms` = 50) : ordre par compte inutile (Silver trie sur `time_us`/`seq`), et la clé `did` biaisait le débit de rattrapage de Spark (une tâche par partition). 3 partitions conservées | **tranché le 2026-09-26** |
+| D12 | Catalogue DuckLake en prod | Base dans le Postgres partagé (`v8kok…`) · conteneur Postgres dédié | Conteneur dédié recommandé (coût du catalogue attribuable à la branche B) | **tranché le 2026-09-26 : Postgres partagé**, base dédiée `ducklake_catalog`, superuser `postgres` (pas de rôle dédié, choix de Julien). Instance peu chargée (n8n retiré, bot quasi inactif). Limite acceptée : le CPU/RAM du catalogue n'est pas isolé par conteneur, à estimer via `pg_stat_database` sur la base DuckLake (phase 7) |
+| D13 | Contrat Bronze (commun aux deux branches) | Enveloppe typée + `record` JSON · message brut seul · une table par collection | Table unique `bronze_events` : `seq, did, collection, operation, rkey, rev, cid, event_time, record` (JSON), `kafka_partition, kafka_offset, processed_at`. **Append-only**, dédoublonnage en Silver sur `seq`. **1 commit par checkpoint** (toutes partitions dans un INSERT), plafonné à 50 000 messages en rattrapage (`commit_every`, même plafond côté Spark via `maxOffsetsPerTrigger`) | **tranché le 2026-09-26**, défini dans `src/processing/bronze.py` |
+| D14 | Rétention et volumétrie | Tout garder · N jours par couche · alternance seule | Budget disque **≤ 100 Go** (autres projets sur le VPS). **Bronze 7 j, Silver 7 j, Gold 30 j**, benchmark (`benchmark_windows`, `branch_calendar`) conservé, Redpanda **24 h**. Parquet en **zstd** (DuckLake écrit en Snappy par défaut : 213 → 121 B/ligne), Bronze et Silver **découpés par jour** (sinon un DELETE n'efface aucun fichier). Nettoyage quotidien à **2 h** (hors 07:00-19:00) : DELETE → `expire_snapshots` → `cleanup_old_files` (jamais de `rm` direct sur Garage, contrairement à velib). **Asset check Dagster : alerte mail à 80 Go** sur le bucket. Estimation en régime stable : **~55 Go** (≤ 70 Go avec 30 % de marge) | **tranché le 2026-09-26** |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -189,12 +191,17 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 ### Phase 2 — Branche B : Quix Streams → DuckLake (Bronze)
 **Objectif :** écriture streaming vers DuckLake.
 
-- [ ] `resources/ducklake.py` : `ATTACH 'ducklake:postgres:…'` avec `DATA_PATH` sur Garage
-- [ ] Application Quix Streams : topic `raw_events` → parsing (StreamingDataFrame) → `BatchingSink` custom vers DuckLake (taille et délai de batch)
+- [x] Prod (D12) : base `ducklake_catalog` (propriétaire `postgres`, choix de Julien) sur le Postgres partagé `v8kok…`, bucket Garage `bluesky-streamhouse` + clé `bluesky` (RWO sur ce bucket seul, `datagrip` en RWO aussi) — 2026-09-26
+- [x] `resources/ducklake.py` : `connect()` sans dépendance Dagster, secrets DuckDB (S3 + Postgres **par défaut, sans nom** : DuckLake ignore les secrets Postgres nommés), `ATTACH 'ducklake:postgres:'` avec `DATA_PATH` sur Garage, `DATA_INLINING_ROW_LIMIT` (non persisté, repassé à chaque ATTACH) et `READ_ONLY` en option
+- [x] Application Quix Streams : `raw_events` → `parse_bronze_event` → `DuckLakeBronzeSink` (`flush()` surchargé : un INSERT Arrow par checkpoint de 5 s, plafond 50 000 messages ; `SinkBackpressureError` si Garage ou Postgres tombe)
 - [ ] Configurer le data inlining (petits commits dans Postgres) et mesurer son effet
-- [ ] Idempotence : commit des offsets après écriture du batch (at-least-once) et dédoublonnage sur la clé naturelle `(did, collection, rkey, time_us)`
-- [ ] `docker/quix/Dockerfile`
-- [ ] Tests unitaires des étapes de transformation (sans Kafka)
+- [x] At-least-once : Quix commite les offsets après le flush du sink. Bronze append-only, dédoublonnage en Silver sur `seq` (D13 ; `time_us` n'existe plus en Jetstream v2)
+- [x] Stack locale : rattrapage et redémarrages en plein flux (SIGTERM et SIGKILL) validés, 0 offset manquant ou en double (voir journal)
+- [x] `docker/quix/Dockerfile` (extensions DuckDB installées au build, chargées sans réseau ; image 208 Mo compressée) + service `quix` dans `docker-compose.yaml` (limite 768 Mo)
+- [x] Rétention et volumétrie décidées (D14)
+- [x] zstd + découpage `year/month/day(event_time)` dans le `setup()` du sink (D14), session DuckDB en UTC — 2026-09-28
+- [ ] **Avant de merger sur `main`** : variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`)
+- [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
 
@@ -205,7 +212,8 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Gold : posts/minute, langues (`langs`), hashtags (facets), utilisateurs actifs, engagement
 - [ ] Tests dbt : `schema.yml` et `assert_*.sql`
 - [ ] Assets Dagster : `quix_bronze` (observable), `duckdb_silver`, `duckdb_gold`
-- [ ] `maintenance/ducklake.py` : flush inlined, merge adjacent files, expire snapshots, cleanup old files
+- [ ] `maintenance/ducklake.py` : flush inlined, merge adjacent files, **rétention D14** (DELETE des jours expirés : Bronze/Silver 7 j, Gold 30 j), expire snapshots, cleanup old files. Constantes `BRONZE_RETENTION_DAYS` etc. dans `config.py` (mêmes noms que velib)
+- [ ] Schedule de nettoyage quotidien à 2 h (Europe/Paris) + asset check « taille du bucket < 80 Go » avec alerte mail (D14)
 - [ ] Sensor d'échec avec alerte mail
 
 **Fini quand :** Dagster matérialise Silver/Gold sur un schedule et les tests dbt passent.
@@ -228,7 +236,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Modèles dbt-spark avec **les mêmes noms et colonnes** que dbt-duckdb
 - [ ] Mêmes tests dbt
 - [ ] Assets Dagster : `spark_bronze`, `spark_silver`, `spark_gold`
-- [ ] `maintenance/iceberg.py` : `rewrite_data_files`, `expire_snapshots`, `remove_orphan_files`
+- [ ] `maintenance/iceberg.py` : `rewrite_data_files`, rétention D14 (DELETE des jours expirés, tables découpées par jour), `expire_snapshots`, `remove_orphan_files`
 
 **Fini quand :** les deux branches exposent les mêmes tables Gold (mêmes noms, mêmes colonnes) et passent les mêmes tests dbt.
 
@@ -238,7 +246,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Schedules Dagster (D10, heure de Paris) : **07:00** démarrage de la branche du jour, **19:00** arrêt. Le producer, lui, tourne 24 h/24.
 - [ ] Chaque branche démarre à l'offset de **19:00 la veille** (`offsets_for_times`) sur son propre consumer group et s'arrête à l'offset de **19:00 le jour même** : aucun trou ni doublon entre deux journées
 - [ ] Rattrapage de 07:00 : ~12 h de données (~18,6 M messages à ~430 msg/s). Vérifier qu'il se termine bien avant 19:00 pour les deux branches.
-- [ ] Rétention `raw_events` passée à 36 h (D10)
+- [x] ~~Rétention `raw_events` passée à 36 h~~ : reste à 24 h (D14)
 - [ ] Table `branch_calendar` (date, branche active, offsets de début et de fin) comme référence du benchmark
 - [ ] Contrôle de complétude : nombre d'événements dans Bronze égal au nombre d'offsets consommés dans Redpanda pour la journée 19:00 → 19:00 (asset check Dagster)
 - [ ] Sensors d'échec sur tous les jobs
@@ -291,7 +299,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] Job `deploy` en CI via Tailscale (OIDC, `tag:ci`), sur le modèle de velib : voir la note Obsidian « VPS - Déploiement CI via Tailscale »
 - [ ] `docker-compose.yaml` prod sur le réseau `coolify`, avec `mem_limit` et `cpus` : producer, spark, quix, dagster, api (Garage, Postgres et Redpanda sont des services Coolify partagés)
 - [ ] Secrets dans Coolify, aucun en clair
-- [ ] Rétention Garage et Redpanda dimensionnées pour le disque du VPS
+- [x] Rétention Garage et Redpanda dimensionnées pour le disque du VPS (D14 : ≤ 100 Go, ~55 Go estimés) — à revérifier une fois Spark en place
 
 **Fini quand :** le pipeline tourne en prod et un push sur `main` redéploie automatiquement.
 
@@ -360,3 +368,37 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - Piège : purgée segment par segment et pas en même temps sur les 3 partitions, la rétention crée de faux trous en début de topic. Il faut analyser sur la fenêtre commune (max des premiers `seq` par partition).
 - **Correctif IPv4** (`fix/producer-ipv4`) : `kafka_base_config()` partagé par AdminClient, Consumer et Producer, avec `broker.address.family=v4`. Testé depuis un conteneur jetable sur le réseau `coolify` : plus d'erreur `Connect to ipv6#…`.
 - **D11 tranché : messages sans clé.** La clé `did` donnait ×1,4 sur une partition (quelques DID très actifs), ce qui aurait ralenti le rattrapage de Spark sur une seule tâche. Test local sur 91 k messages : 30,7 k / 30,6 k / 29,9 k. Commit `feat(producer)` sur `fix/producer-ipv4` ; en prod au prochain déploiement.
+
+### 2026-09-26 — Déploiement auto, D11 en prod, D12
+- **Premier déploiement CI via Tailscale** (merge `a21a387`, PR #6). Deux pièges : le subject OIDC GitHub de ce repo est au nouveau format à IDs immuables (`repo:Julcrm@173714792/bluesky-streamhouse@1385213211:ref:refs/heads/main`), que le joker `repo:Julcrm/*` ne couvre pas ; et `COOLIFY_WEBHOOK_URL` pointait sur le domaine (403 `Forbidden` de Traefik, 9 octets). Note du vault mise à jour.
+- **Producer redéployé** à 23:24 UTC : reprise au curseur lu dans le topic, plus d'erreur IPv6, 36 Mio de RAM. **Partitions sur ~6 min : +68,3 k / +68,9 k / +67,4 k (écart de 2 %)**, D11 validé en prod.
+- Mesure : compter par écart de high-watermark, pas par `rpk consume -o @timestamp` (le timestamp est l'heure de l'événement, pas de l'écriture).
+- **Phase 1 close.**
+- **D12 tranché : catalogue DuckLake dans le Postgres partagé**, base `ducklake_catalog` avec le superuser `postgres`. Base `n8n` supprimée (plus en prod, aucune connexion ni conteneur).
+- **Garage** : bucket `bluesky-streamhouse`, clé `bluesky` (`GK833d…`) en RWO sur ce bucket uniquement, `datagrip` en RWO aussi. Le bucket `etl` n'existe plus.
+- **`resources/ducklake.py`** : DuckLake format 1.0 (DuckDB 1.5.5). `DATA_PATH` est enregistré dans le catalogue au premier ATTACH ; la limite d'inlining ne l'est pas. Limite par défaut : **10 lignes** (au-delà, un INSERT écrit directement un Parquet) : avec des batchs Quix de plusieurs milliers de lignes, l'inlining ne jouera que si on la relève (expérience du point 3). Test d'intégration sur la stack locale, ignoré en CI.
+- **D13 tranché : contrat Bronze** (`src/processing/bronze.py`), table unique, append-only, 1 commit par checkpoint.
+- **App Quix en local** : 1er essai avec des paramètres liste + `unnest` : **~410 lignes/s** (conversion Python valeur par valeur), un checkpoint de 123 k lignes a mis 205 s. Passage à **pyarrow** (groupe `quix`) : **~190 000 lignes/s** sur la même DuckLake.
+- **Rattrapage local** : 1,26 M messages rattrapés en ~60 s (commits de 50 000 lignes en ~350 ms), puis régime live à ~1 800 lignes par checkpoint de 5 s (70-100 ms par INSERT). Contrôle Bronze : **0 offset manquant, 0 offset en double** sur les 3 partitions, du début du topic à l'offset commité.
+- Quix crée un dossier `state/` même sans opérateur à état : ignoré par git. `make quix` ajouté.
+- Le réglage IPv4 de librdkafka est passé dans `config.KAFKA_CLIENT_CONFIG`, partagé par le producer et Quix (l'image Quix n'a pas `websockets`, elle ne peut pas importer le producer).
+- **Test de redémarrage** (producer actif en continu) : SIGTERM → dernier flush puis sortie propre ; SIGKILL au milieu d'un checkpoint → reprise au dernier offset commité. Bronze : +485 k lignes, **0 offset manquant, 0 en double** ; snapshots +17 pour 17 commits. Un doublon n'est possible que si le crash tombe entre l'INSERT et le commit des offsets (fenêtre de quelques ms), Silver le retire.
+- Après un SIGKILL, la nouvelle instance attend **~32 s** son premier commit (vs 7 s après un SIGTERM) : Redpanda attend l'expiration de la session de l'instance morte (`session.timeout.ms`, 45 s par défaut). Option : le descendre à ~10 s, à trancher.
+- **`session.timeout.ms` à 10 s** pour Quix (au lieu de 45 s) : reprise plus rapide après un crash.
+- **Dockerfile Quix** : extensions DuckDB installées au build dans `~/.duckdb` (chargement vérifié avec `--network none`), dossier `state/` créé pour `appuser`. Testé sur le réseau de la stack locale avec les hôtes de prod : rattrapage puis live, `docker stop` propre en 2 s, **~280 Mio de RAM** après un lot de 50 000 lignes.
+- **Cache uv dans les images** : la couche `uv sync` embarquait ~300 Mo de cache. `UV_NO_CACHE=1` dans les deux Dockerfiles : image Quix 304 → 208 Mo compressée, producer 71 Mo.
+- **Volume Bronze** : 230 B/ligne en Parquet zstd (fichiers de 7,4 Mo en moyenne en local), soit **~6,9 Go/jour** pour la branche B. Rétention à trancher avant le déploiement 24 h/24.
+- **D14 tranché : rétention et volumétrie**, budget ≤ 100 Go sur le VPS. 1re estimation (~150 Go) fausse : elle comptait les deux branches actives en même temps, alors qu'une seule écrit par jour (D1 + D10).
+- **DuckLake écrit en Snappy par défaut** : sur un fichier Bronze réel, zstd niveau 3 donne **121 B/ligne contre 213** (−43 %), zstd 9 seulement 115. `record` pèse ~60 % du fichier, `cid` ~25 %. Mix local : 57 % likes, 26 % posts (record moyen 570 caractères), 11 % reposts, 6 % follows.
+- **Retenu** : Bronze 7 j (~25 Go), Silver 7 j (~20 Go, estimé), Gold 30 j (< 1 Go), Redpanda 24 h (~6,7 Go) : **~55 Go**. Garde-fou : alerte à 80 Go.
+- velib vérifié : `src/config.py` garde Bronze 7 j, Silver 30 j, Gold 30 j, nettoyage à 2 h par `fs.rm` direct sur S3. Non transposable à DuckLake/Iceberg : le catalogue référencerait des fichiers disparus.
+- **Rien n'est encore codé pour D14** : à faire en tête de la prochaine session, avant le merge sur `main`.
+
+### 2026-09-28 — D14 dans le sink
+- Branche `feat/phase-2-quix-ducklake` bien poussée (à jour avec `origin`).
+- **`setup()` du sink** : `CALL lake.set_option('parquet_compression', 'zstd')` (persisté dans le catalogue, `set_write_options()` dans `resources/ducklake.py`), puis `CREATE TABLE` et `ALTER TABLE … SET PARTITIONED BY (year, month, day(event_time))` (`BRONZE_PARTITION_BY` dans le contrat Bronze). Les deux ne valent que pour les fichiers écrits ensuite.
+- **Idempotent** : un 2e `SET PARTITIONED BY` identique ne crée pas de snapshot, donc aucun effet au redémarrage de Quix.
+- **Piège fuseau horaire** : DuckLake calcule `year/month/day` dans le fuseau de la **session DuckDB**. Sur le Mac (Europe/Paris), un événement de 23:30 UTC tombait dans le jour suivant. `SET TimeZone = 'UTC'` ajouté dans `connect()`, avant l'ATTACH, pour tous les clients (Quix, Dagster, maintenance).
+- **Tests** : unitaires (DDL de partition, UTC avant ATTACH) et intégration du sink (événements de part et d'autre de minuit UTC → `day=25` et `day=26`, codec `ZSTD`, `setup()` rejoué deux fois). Piège : sous la limite d'inlining (10 lignes), rien n'est écrit en Parquet. 30 tests OK avec la stack locale.
+- **Mesure locale** (105 k lignes, 4 min de flux, table repartie de zéro) : 49 fichiers, tous dans `year=2026/month=9/day=28`, tous en ZSTD. Mêmes lignes réécrites en un seul fichier : **Snappy 275 B/ligne, zstd 159 B/ligne (−42 %)**, gain identique à la mesure du 2026-09-26. Fichiers live (0,36 Mo en moyenne) : 168 B/ligne, l'écart sera repris par le merge de fichiers (phase 3).
+- **B/ligne absolu dépendant du mix** : cet échantillon compte 57 % de posts (record moyen 740 caractères) contre ~11 % sur 24 h en prod. D'où 159 B/ligne contre 121 sur un mix riche en likes. Estimation D14 (~55 Go) à valider sur 24 h en prod ; même à 160 B/ligne, Bronze 7 j ≈ 41 Go et le total ≈ 70 Go, sous l'alerte de 80 Go.

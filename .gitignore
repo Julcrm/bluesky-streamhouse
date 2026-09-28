@@ -12,3 +12,5 @@ dist/
 build/
 *.egg-info/
 .idea/
+# Quix Streams local state (unused: the app is stateless)
+state/
