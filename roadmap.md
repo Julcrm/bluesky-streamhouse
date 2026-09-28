@@ -7,7 +7,7 @@
 **Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Contrôle de la prod** (Quix déployé le 2026-09-28 à 09:42 UTC avec D14 + D15) : conteneur `bsh-quix` sans redémarrage, RAM (limite 768 Mo), logs `Bronze commit` (latence des INSERT inlinés) et `Inlined flush` (toutes les 5 min), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, taille de la base `ducklake_catalog`, **B/ligne sur 24 h** (valide ou corrige D14).
+> 1. **Contrôle de la prod** (Quix redéployé le 2026-09-28 avec la limite d'inlining lue dans `config.py`) : conteneur `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `docker ps --filter name=quix`) sans redémarrage, RAM (limite 768 Mo), logs `Bronze commit` (latence des INSERT inlinés) et `Inlined flush` (toutes les 5 min), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, taille de la base `ducklake_catalog`, **B/ligne sur 24 h** (valide ou corrige D14).
 > 2. Entre 08:53 et 09:42 UTC, la prod a tourné **sans inlining** (PR #7 mergée dans `main` avant le commit D15) : quelques centaines de petits fichiers dans Bronze, sans conséquence, repris par la fusion de fichiers de la phase 3.
 > 3. Si le contrôle est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb + Dagster).
 ---
@@ -415,4 +415,6 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - La **PR #7 visait `main`** (et non `dev`) et a été mergée avant le commit D15 : déploiement à 08:53 UTC avec D14 seulement, donc sans inlining pendant ~50 min. `dev` réaligné sur `main`, puis D15 mergé `feat` → `dev` → `main`.
 - **CI rouge sur D15** : le retry d'un flush raté remettait `_last_inlined_flush` à `0.0`, or `time.monotonic()` compte depuis le démarrage de la machine. Sur un runner GitHub démarré depuis moins d'une heure, le retry attendait tout un intervalle (même risque sur un VPS qui vient de redémarrer). Passé sur mon Mac, qui tournait depuis des jours. Corrigé avec `float("-inf")`, diagnostic confirmé en simulant `monotonic() = 100`.
 - **Déployé le 2026-09-28 à 09:42 UTC** (`e6cfe7e`) : CI verte, déploiement Coolify OK. Contrôle de la prod à faire.
-- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.
+- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
+- **Correctif** : `DUCKLAKE_DATA_INLINING_ROW_LIMIT` et `QUIX_AUTO_OFFSET_RESET` retirés du compose (valeurs dans `config.py` seulement, réglages de benchmark versionnés) et supprimés dans Coolify par Julien. Règle : pas de `${VAR:-défaut}` dans le compose pour un réglage qui doit suivre le code.
+- En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
