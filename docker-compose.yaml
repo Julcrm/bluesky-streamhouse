@@ -37,14 +37,15 @@ services:
     container_name: bsh-quix
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - QUIX_AUTO_OFFSET_RESET=${QUIX_AUTO_OFFSET_RESET:-earliest}
+      # Benchmark settings (offset reset, inlining limit D15) stay in src/config.py on
+      # purpose: Coolify stores every ${VAR:-default} at first deploy and keeps injecting
+      # it, so a default changed here later would silently not apply
       # DuckLake catalog on the shared Postgres (decision D12)
       - POSTGRES_HOST=${POSTGRES_HOST}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - DUCKLAKE_CATALOG_DB=${DUCKLAKE_CATALOG_DB:-ducklake_catalog}
-      - DUCKLAKE_DATA_INLINING_ROW_LIMIT=${DUCKLAKE_DATA_INLINING_ROW_LIMIT:-10000}
       # Garage, key `bluesky` (RWO on this bucket only)
       - S3_ENDPOINT_URL=http://garage:3900
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
