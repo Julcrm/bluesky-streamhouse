@@ -7,6 +7,9 @@
 **Dernière mise à jour :** 2026-09-28 (soir, fin de session)
 
 > **Prochaine session : commencer ici**
+>
+> **Où on en est (2026-09-28, ~19:45 Paris)** : tout le travail est sur **`feat/phase-3b-split-catalogs`**, poussée, basée sur `feat/phase-3b-gold` (Gold + roadmap `5a2596b`, tout inclus). Contenu : un catalogue DuckLake par writer (D22), inlining conservé à **5 000** + flush 5 min (D15), premier run Silver plafonné, `TransactionException` rejouable. Validé en local (lint, 35 tests, 65 tests dbt sous charge, 0 perte). **Rien n'est déployé** : la prod tourne toujours l'ancien code (un seul catalogue, inlining à 10 000). Aucune PR ouverte. Le commit `1f2cf37` (Parquet direct) est dans l'historique mais annulé par `0c3092a`.
+>
 > 1. **Bilan sur 24 h de la prod** (à partir du 2026-09-29 ~10:00 UTC, Quix démarré à 09:56 le 28) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation disque de ~60-65 Go), et **latence des `Bronze commit`** : si la prod montre la même dent de scie qu'en local (1,4 s → 20-48 s puis retour à ~0,2 s quand un lot passe en Parquet, voir journal du 28 au soir), le résultat « inlining trop lent à ce débit » est confirmé sur Linux. **Vérifier aussi la limite d'inlining à 5 000** (D15) : débit du producer heure par heure **sur les 24 h, nuit comprise** (pointe US non encore observée ; on n'a que 09:56-18:00 UTC) ; si une heure dépasse ~800 msg/s en moyenne (checkpoint > 4 000 lignes), relever la limite. Commande : `docker logs --since 26h $(docker ps -q --filter name=producer) 2>&1 | grep "msg/s"`. Requête d'audit des offsets (lecture seule) :
 >    ```bash
 >    Q=$(docker ps -q --filter name=quix)
@@ -24,7 +27,7 @@
 > 3. **3c Dagster** : code location `bluesky_duckdb` (D20) dans le `dagster-workspace` partagé, `dagster-dbt`, job de 15 min Silver → Gold **relancé en boucle tant que Silver a du retard** (plafond de 500 k lignes Bronze par run), `RetryPolicy`, image Docker avec le manifest dbt compilé, **2 ATTACH** dans le profil (D22). Mesurer en prod la latence de Quix pendant les runs dbt.
 > 4. **3d maintenance** : `DELETE` de rétention + `CHECKPOINT` (D21) **sur chaque catalogue** (D22), garde-fou D16, alertes 80 Go / catalogue 2 Go.
 >
-> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). En local : `make up`, puis `make dbt-build` ; la base `ducklake_spike` et le dossier `spike/` du Garage local servent aux expériences (à supprimer après la 3d). Issue DuckLake publiée (bug de scan des données inlinées).
+> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). En local : `make up`, puis `make dbt-build` ; le catalogue local est désormais dans les schémas `bronze` / `transform` de `ducklake_catalog` (l'ancien, dans `public` + `ducklake/`, est obsolète) ; les bases `ducklake_spike` et `ducklake_split` et les dossiers `spike/` et `spike_split/` du Garage local servent aux expériences (à supprimer après la 3d). Les scripts de test de ce soir (banc synthétique, tests réels) étaient dans le scratchpad de la session, perdus : les chiffres sont dans le journal. Issue DuckLake publiée (bug de scan des données inlinées).
 ---
 
 ## Architecture cible
