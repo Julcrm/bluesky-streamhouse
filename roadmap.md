@@ -7,7 +7,7 @@
 **Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Audit des offsets en prod** (3 redémarrages de déploiement le 2026-09-28, dernier critère de la phase 2), depuis le VPS :
+> 1. ~~**Audit des offsets en prod**~~ : fait le 2026-09-28 à 11:29 UTC, 0 manquant / 0 doublon (voir journal). Requête (ajouter `SET memory_limit='150MB'; SET temp_directory='/tmp/duckdb_audit'`, et caster les timestamps en `VARCHAR` : pas de `pytz` dans l'image) :
 >    ```bash
 >    Q=$(docker ps -q --filter name=quix)
 >    docker exec $Q /app/.venv/bin/python -c "
@@ -19,7 +19,7 @@
 >      FROM lake.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
 >    ```
 >    Attendu : `missing = 0` sur les 3 partitions (quelques `dup` tolérés, retirés en Silver).
-> 2. **Bilan sur 24 h** : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
+> 2. **Bilan sur 24 h** (pas avant le 2026-09-29 ~10:00 UTC, déploiement du correctif à 09:56) : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
 > 3. Si tout est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb Silver/Gold + Dagster, maintenance DuckLake avec la rétention D14).
 > 4. Pousser les commits de doc restés en local sur `feat/phase-2-quix-ducklake`.
 >
@@ -435,3 +435,10 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
 - **Contrôle après correctif (10:01 UTC)** : variable absente de l'environnement, limite lue = 10 000 (`/app/.venv/bin/python`, le `python` système de l'image n'a pas les dépendances). **INSERT inliné en prod : 350-640 ms (~450 ms)** par checkpoint de ~1 350 lignes, contre ~50 ms en Parquet direct (×9) ; le checkpoint s'étire de ~5,1 à ~5,5 s. **Flush : 70 842 lignes en 1,34 s** toutes les 5 min. Coût à reporter dans le benchmark face au gain en fichiers (1 fichier par jour et par flush au lieu de ~55).
 - **Fin de session** : audit des offsets en prod non lancé (requête prête dans « Prochaine session »). Phase 2 à clore après l'audit et le bilan de 24 h.
+
+### 2026-09-28 — Audit des offsets en prod
+- **Audit Bronze à 11:29 UTC** (lecture seule, dans le conteneur Quix) : **37,9 M lignes, 0 offset manquant, 0 doublon** sur les 3 partitions (12,42 M / 12,78 M / 12,70 M), de la première écriture (08:55 UTC, rattrapage des 24 h de Redpanda) jusqu'au dernier checkpoint. Les 3 redémarrages de déploiement n'ont créé aucun trou.
+- Conteneur démarré à 09:56 UTC, **0 redémarrage**, 174 Mio au repos (pic à 412 Mio / 768 pendant l'audit ou un flush). Flush toutes les 5 min : ~77-85 k lignes en 1,1-1,2 s, aucun `WARN`. INSERT inliné : ~410-455 ms pour ~1 500 lignes.
+- **Pièges de la requête d'audit** : DuckDB déborde sur disque dans `.tmp` du répertoire courant (`/app`, non inscriptible par `appuser`), d'où `temp_directory` dans `/tmp` + `memory_limit` pour ne pas faire tomber le conteneur de prod (limite 768 Mo) ; lire un `TIMESTAMPTZ` depuis Python exige `pytz`, absent de l'image, d'où le cast en `VARCHAR`.
+- **Reste pour clore la phase 2** : bilan sur 24 h (le 2026-09-29).
+
