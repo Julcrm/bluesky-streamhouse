@@ -2,6 +2,7 @@
 
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
+> **Note Obsidian à tenir à jour** : `~/Desktop/admin VPS/admin_vps/Bluesky Streamhouse - Décisions et paramètres.md` explique chaque décision et paramètre important (le pourquoi, les options écartées, les questions d'entretien). **À chaque décision nouvelle ou modifiée (tableau D1…), mettre la note à jour dans la même session** ; une décision abandonnée reste barrée avec la raison.
 
 **Phase en cours :** 3 — 3a, 3b et **3c déployées en prod** le 2026-09-28 au soir (premier run de rattrapage en cours à l'arrêt de la session) ; reste 3d maintenance
 **Dernière mise à jour :** 2026-09-28 (~23:25 Paris, fin de session)
@@ -70,6 +71,25 @@ complexité opérationnelle) une stack JVM « enterprise » face à une stack ze
 **Liberté totale sur les mécanismes** : chaque stack est configurée **à son meilleur** et utilise ses fonctions natives, même si l'autre stack n'a pas d'équivalent (ex. : data inlining DuckLake D15, flux de changements DuckLake D16). On ne bride jamais une techno pour copier l'autre : l'écart est **un résultat du benchmark**, pas un biais à corriger. La règle vaut dans les deux sens (Spark/Iceberg auront droit à leurs propres atouts en phases 4-5).
 
 **Contrepartie** : le coût de chaque avantage (code sur mesure, pièges, maintenance, coût caché comme Postgres pour l'inlining) est mesuré ou noté, car la complexité opérationnelle fait partie de la question du projet.
+
+## Crédibilité du benchmark (ajouté le 2026-09-28)
+
+Objectif : un résultat **qu'on ne peut pas balayer d'un « évidemment »**. « DuckLake bat Spark sur un seul nœud » est prévisible, donc attaquable. La cible est un résultat **chiffré et conditionnel** : où se trouve le point de bascule, et pourquoi on en est loin (ou pas) pour ce type de charge. Prouver que Spark est « overkill » **dans certains cas** exige de montrer aussi **dans quels cas il ne l'est pas**.
+
+1. **Hypothèses écrites et gelées avant la phase 7** (pré-enregistrement) : direction attendue, métrique, critère de décision. Le résultat est publié **quel qu'il soit**. C'est la protection contre le biais de confirmation. Brouillon, à valider et chiffrer par Julien avant le gel :
+   - **H1 — Coût fixe** : RAM et CPU au repos plus élevés pour A (JVM, driver Spark) que pour B.
+   - **H2 — Coût marginal au débit live** (~200-600 msg/s) : ms CPU/message et Mo·s de RAM/10 000 messages plus faibles pour B.
+   - **H3 — Débit max soutenu** (msg/s/vCPU, rattrapage) : **issue ouverte**. Quix est un seul processus Python et le catalogue DuckLake sérialise les commits ; Spark répartit sur les 4 cœurs. A peut gagner ici.
+   - **H4 — Latence p50/p95 de bout en bout** en live : issue ouverte (même cadence de 5 s ; commit inliné ~1 s côté B).
+   - **H5 — Stockage** (Ko/message après compaction) : équivalent (Parquet zstd des deux côtés).
+   - **H6 — Complexité opérationnelle** : plus élevée pour A (voir métriques en phase 7).
+   - **H7 — Point de bascule** : il existe un débit X au-delà duquel le coût total par message de A rejoint celui de B ; on mesure si X est à portée d'un seul nœud.
+   - **Critère de décision** : un écart n'est retenu que s'il dépasse la variation d'un jour à l'autre (7 jours par branche) et entre répétitions (test contrôlé, 3 répétitions par débit) ; sinon « pas de différence mesurable ».
+2. **Deux protocoles complémentaires** (D23) : le **live en alternance** (D1, conditions réelles, méthode principale) et un **test de montée en charge contrôlé** sur un même échantillon rejoué. L'alternance **ne fausse pas** le benchmark : ratios par message, tranches de débit et 7 jours minimum par branche (15 si on va à 30 jours) moyennent les différences de trafic. Ses vrais biais sont ailleurs : **mix de collections** (un post coûte plus qu'un like → comparer par collection ou vérifier que le mix est comparable), **voisins du VPS** (mesurer le CPU de l'hôte), **tout changement de code ou de réglage pendant la période** (geler la configuration pendant les mesures), événements Bluesky exceptionnels (jours exclus et documentés). Le test contrôlé apporte ce que le live ne peut pas donner **quelle que soit sa durée** : des débits au-delà du trafic réel (~200-600 msg/s) pour trouver le point de bascule, et la parité exacte des tables Gold sur des données identiques. Durée : 14 jours minimum, prolongée à 30 si les résultats ne sont pas stables d'une semaine à l'autre.
+3. **Modèle coût fixe + coût marginal** : coût total par message = coût fixe ÷ débit + coût marginal. « Overkill » = le coût fixe domine au débit réel. Le point de bascule se calcule, puis se vérifie avec le test contrôlé (toute extrapolation au-delà des débits mesurés est signalée comme telle).
+4. **Chaque stack réglée sérieusement, preuve à l'appui** : checklist de réglage Spark (phases 4-5) et réglages DuckLake (D15, D21) documentés. Un Spark laissé par défaut serait un homme de paille.
+5. **Complexité opérationnelle chiffrée**, pas seulement racontée (métriques en phase 7).
+6. **Section « Limites » assumée** et **données brutes + scripts publiés** (phase 10).
 
 ---
 
@@ -191,6 +211,7 @@ Montée vers Spark 4.2 : à réévaluer dès qu'Iceberg publie `iceberg-spark-ru
 | D20 | Orchestration Dagster | Une code location pour tout · une par branche ; dbt en sous-processus (velib) · `dagster-dbt` | **Une code location par branche** (`bluesky_duckdb` en phase 3, `bluesky_spark` en phase 5) dans le `dagster-workspace` partagé : pas de JVM dans l'image B (zero-JVM honnête), coûts dbt attribuables par conteneur (`DefaultRunLauncher` : les runs tournent dans le conteneur du code server). **`dagster-dbt` (`@dbt_assets`)** : un asset par modèle, tests en asset checks, durée par modèle (mesure de benchmark), manifest compilé au build, projet trouvé par `Path(__file__)`. **Silver → Gold toutes les 15 min** (fraîcheur = contrat, identique pour A), un seul run à la fois. Conteneur limité à **1,5 Go**, DuckDB `memory_limit = 1GB` et `temp_directory` dans `/tmp` (dans `config.py`, pas en `${VAR:-défaut}`). **Purge des runs Dagster de plus de 30 j** dans la maintenance | **tranché le 2026-09-28** |
 | D21 | Maintenance DuckLake (quotidienne, 2 h Europe/Paris) | Étapes explicites (`merge_adjacent_files`, `expire_snapshots`, `cleanup_old_files`…) · `CHECKPOINT` natif | **`DELETE` de rétention explicite (D14 : Bronze/Silver 7 j, Gold 30 j), puis `CHECKPOINT` natif** (règle du benchmark : une commande au lieu des 3-4 procédures d'Iceberg, résultat « complexité »). Options persistées par `set_option`, valeurs dans `config.py` : **time travel 24 h** (`expire_older_than`), **1 h** avant suppression des fichiers, `target_file_size`. Métadonnées Dagster : durée + différences avant/après lues dans le catalogue (fichiers actifs, octets, snapshots, fichiers en attente) ; pas de détail par étape, accepté. **Garde-fou D16 avant le `CHECKPOINT`** : dernier snapshot traité par Silver de moins de 24 h, sinon maintenance annulée + alerte. Conflit avec Quix (24 h/24 jusqu'en phase 6) : `CHECKPOINT` relancé 3 fois avec backoff. **Asset checks** : taille du bucket < **80 Go** par **listing S3** (inclut orphelins et fichiers en attente), taille de `ducklake_catalog` < **2 Go** (`pg_database_size`) ; sensor d'échec + mail Resend. Vérifié en local : `CHECKPOINT` couvre flush, fusion, expiration, vieux fichiers **et orphelins** ; options `expire_older_than`, `delete_older_than`, `target_file_size`. Un fichier planifié pour suppression n'est effacé qu'au `CHECKPOINT` **suivant** : ~1 jour de fichiers en trop (~10 Go), **accepté** (pas de nettoyage à 3 h) | **tranché le 2026-09-28** |
 | D22 | Catalogues DuckLake de la branche B | Un catalogue pour tout · un par writer | **Un par writer** : `bronze` (Quix) et `transform` (dbt : Silver + Gold), dans la même base Postgres `ducklake_catalog`, un schéma de métadonnées chacun (`METADATA_SCHEMA`). DuckLake numérote les snapshots par catalogue : plus aucun conflit de commit entre Quix, dbt et la maintenance. Découpage par writer et non par couche (un catalogue Gold à part n'éviterait aucun conflit). **`DATA_PATH` disjoints** (`ducklake/bronze/`, `ducklake/transform/`) : un `CHECKPOINT` efface tout fichier non suivi sous son chemin. dbt attache `bronze` en `READ_ONLY`. Coût : 2 `ATTACH`, 2 `CHECKPOINT`, pas de transaction entre Bronze et Silver (inutile). Validé en local : 36 + 31 `dbt build` à 65/65 sous écriture continue et 2 `CHECKPOINT` de Bronze, 0 relance, 0 offset manquant ou en double | **tranché le 2026-09-28** ; migration de la prod à trancher après le bilan de 24 h |
+| D23 | Protocole du benchmark | Live en alternance seul (D1) · + rejeu d'un même échantillon | **Les deux, complémentaires** : D1 reste la méthode principale (conditions réelles, 7 jours par branche, lundi A contre lundi B). En plus, **test de montée en charge contrôlé** : un échantillon figé de `raw_events` (topic dédié, rétention illimitée) rejoué par chaque branche à **1×, 4× et au maximum**, **3 répétitions** par débit, sorties dans des tables isolées supprimées après. Donne la courbe des coûts marginaux et le point de bascule (H7), et **compare les tables Gold de A et B sur les mêmes données** (preuve forte de parité du contrat). Remplace l'option « rejouer 1 h » de la phase 7. Hypothèses H1-H7 gelées avant la phase 7 | **tranché le 2026-09-28** ; taille de l'échantillon (20 min à 1 h : ~0,3 à 1 Go dans Redpanda) à fixer selon le budget disque (D14) |
 
 Les décisions tranchées sont reportées dans le journal, avec leur justification.
 
@@ -275,6 +296,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Même schéma Bronze que la branche B
 - [ ] `docker/spark/Dockerfile` (JVM, jars pré-téléchargés dans l'image, pas au runtime)
 - [ ] Tests des transformations avec une SparkSession locale
+- [ ] **Checklist de réglage Spark, documentée** (crédibilité du benchmark : pas d'homme de paille) : `spark.sql.shuffle.partitions` = nombre de cœurs (le défaut, 200, est absurde à ce volume) ; AQE activé ; mémoire driver/exécuteur dimensionnée sous la même limite Docker que B ; `maxOffsetsPerTrigger` = 50 000 (même plafond que Quix, D13) ; trigger de 5 s ; Iceberg : `write.target-file-size-bytes`, distribution d'écriture, zstd comme B (D14). Chaque réglage avec sa raison et, si possible, la mesure avant/après
 
 **Fini quand :** la table Iceberg Bronze se remplit et reprend proprement depuis le checkpoint.
 **Pièges :** un trigger de 5 s donne environ 17 000 commits/jour, donc explosion des petits fichiers et des métadonnées (la maintenance est obligatoire). Le catalogue `hadoop` supporte un seul writer.
@@ -285,6 +307,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] Modèles dbt-spark avec **les mêmes noms et colonnes** que dbt-duckdb
 - [ ] Mêmes tests dbt
 - [ ] Assets Dagster : `spark_bronze`, `spark_silver`, `spark_gold`
+- [ ] Réglages dbt-spark documentés comme ceux de dbt-duckdb (mémoire, parallélisme, fichiers en sortie)
 - [ ] `maintenance/iceberg.py` : `rewrite_data_files`, rétention D14 (DELETE des jours expirés, tables découpées par jour), `expire_snapshots`, `remove_orphan_files`
 
 **Fini quand :** les deux branches exposent les mêmes tables Gold (mêmes noms, mêmes colonnes) et passent les mêmes tests dbt.
@@ -324,11 +347,15 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] **Coût fixe à part** : RAM et CPU du conteneur au repos (JVM, runtime Quix) mesurés séparément et affichés comme une ligne de base
 - [ ] **Test de rattrapage quotidien (D10)** : chaque matin à 07:00, la branche du jour rattrape ~12 h de nuit. Débit de résorption du lag = débit max soutenu (msg/s/vCPU), mesuré chaque jour sans test artificiel.
 - [ ] **Séparer les deux régimes** dans `benchmark_windows` : `catchup` (07:00 → fin du lag) et `live` (temps réel jusqu'à 19:00). Latence et ratios d'efficience du régime live à ne pas mélanger avec le rattrapage.
+- [ ] **Hypothèses H1-H7 validées, chiffrées et gelées** (commit daté) **avant** la première journée de mesure
 - [ ] Limites CPU/RAM Docker identiques pour les deux branches
 - [ ] Comparer aussi à jour de semaine équivalent (lundi A contre lundi B)
-- [ ] Optionnel : les deux branches rejouent le même échantillon d'1 h, pour valider la normalisation et vérifier la parité des tables Gold
+- [ ] **Test de montée en charge contrôlé (D23)** : `benchmark/replay.py` qui rejoue l'échantillon figé à un débit cible (1×, 4×) ou sans limite (max) ; 3 répétitions par débit et par branche, hors de la fenêtre 07:00-19:00 de l'autre branche, mêmes limites Docker ; tables de sortie isolées puis supprimées. Mesures : ms CPU/message, Mo·s/10 000 messages, débit, latence p50/p95
+- [ ] **Parité des sorties** sur l'échantillon : tables Gold de A et B identiques (même contenu, pas seulement même schéma)
+- [ ] **Modèle coût fixe + coût marginal** et **point de bascule** (H7), extrapolations signalées comme telles
+- [ ] **Complexité opérationnelle chiffrée** : taille des images, temps de démarrage à froid, nombre de procédures de maintenance et de réglages, lignes de configuration, incidents et temps de reprise sur les 14 jours
 
-**Fini quand :** 14 jours de fenêtres (7 par branche) stockés, avec des résultats stables d'une semaine à l'autre.
+**Fini quand :** 14 jours de fenêtres (7 par branche) stockés, avec des résultats stables d'une semaine à l'autre, et le test contrôlé fait (3 débits × 3 répétitions × 2 branches), chaque hypothèse tranchée (confirmée, infirmée ou pas de différence mesurable).
 **Piège :** la RAM est un niveau, pas un flux. « Mo par 10 000 messages » calculé naïvement (RAM moyenne ÷ messages) explose la nuit quand le trafic chute. D'où le Mo·s (intégrale dans le temps, comme la facturation cloud) et la comparaison par bucket de débit.
 
 ### Phase 8 — Dashboard & serving
@@ -354,8 +381,11 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 
 ### Phase 10 — Documentation & valorisation
 - [ ] README : Architecture, Stack, Project structure, **Benchmark results**, Tests, CI, Deployment
-- [ ] `docs/adr/` : une ADR par décision D1 à D6
-- [ ] Rédaction des conclusions du benchmark (article ou page portfolio)
+- [ ] `docs/adr/` : une ADR par décision (D1 à D23 et suivantes)
+- [ ] Rédaction des conclusions du benchmark (article ou page portfolio) : chaque hypothèse H1-H7 et son verdict, le point de bascule, **3 résultats chiffrés en tête du README**
+- [ ] **Section « Limites »** : un seul nœud (choix assumé : la taille réelle de la plupart des charges), VPS partagé et voisins bruyants, catalogue DuckLake sur un Postgres partagé (D12), jours différents entre branches (compensé par D1 + D23), ce que le benchmark **ne prouve pas** (comportement sur un cluster)
+- [ ] **Données brutes et scripts publiés** (`benchmark_windows`, résultats du test contrôlé, requêtes de calcul) pour que les chiffres soient refaisables
+- [ ] Article anticipé possible dès maintenant sur les découvertes DuckLake (compteur de snapshots au niveau du catalogue, coût de l'inlining, bug du scan des lignes inlinées), sans attendre la branche A
 
 ---
 
@@ -565,3 +595,8 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Incident 3 — schedule aveugle aux runs manuels** : un « Materialize all » dans l'UI (lancé par Julien) tourne en `__ASSET_JOB`, que le schedule ne voyait pas → deux runs à la fois (le 2e bute sur le verrou du fichier DuckDB de dbt). Corrigé dans le même commit : le schedule saute dès qu'un run **de la location `bluesky_duckdb`** n'est pas fini (tests ajoutés, 49 au total).
 - **Runs orphelins** : un redéploiement tue les runs en cours, qui restent `STARTED` (pas de suivi des runs dans le `dagster.yaml` partagé) et bloqueraient désormais le schedule. Deux runs passés en `CANCELED` (mutation `terminateRuns`, `MARK_AS_CANCELED_IMMEDIATELY`) après vérification qu'aucun processus ne tournait. **À traiter** : activer `run_monitoring` dans le `dagster.yaml` du workspace (le daemon marque en échec les runs dont le processus a disparu), sinon chaque redéploiement pendant un run bloque le schedule.
 - **Premier run de rattrapage** (`c5bb1c36`, lancé à 21:16:58 UTC par l'API) : passes Silver de 500 000 lignes en **~18 s** (~28 000 lignes/s), ~29 M lignes Bronze à rattraper ; RAM du code server de 0,5 à **1,27 Gio / 1,5** (serveur gRPC ~240 Mio + processus du run ~230 + processus de l'étape ~300 + dbt/DuckDB jusqu'à 1 Go) ; Quix à 1,2-1,9 s max par commit pendant les passes, 0 `WARN`. **Session arrêtée avant la fin du run** (~10 min de passes + le `build` final restaient).
+
+### 2026-09-28 (nuit) — Crédibilité du benchmark (D23)
+- Avis demandé par Julien sur le projet, sans ménagement. Points faibles relevés : risque de ne pas finir la branche A (compétence Spark la plus demandée) ; résultat « DuckLake bat Spark sur un nœud » prévisible, donc attaquable ; rigueur attaquable (jours différents, VPS partagé, Spark peu réglé) ; valeur invisible pour un recruteur sans README à résultats chiffrés ; nécessité de savoir défendre chaque décision seul ; pas de cloud public (prévoir la transposition S3/EMR/Databricks).
+- Julien veut un benchmark pris au sérieux **et** montrer que Spark est overkill dans certains cas. Réponse : prouver l'« overkill » par un **modèle coût fixe + coût marginal** et un **point de bascule**, avec des **hypothèses gelées avant les mesures** (H1-H7, section « Crédibilité du benchmark »), un **test de montée en charge contrôlé** en complément de D1 (D23), une **checklist de réglage Spark**, la **complexité opérationnelle chiffrée**, une **section Limites** et les **données brutes publiées**. Le résultat attendu est nuancé (Spark peut gagner en débit max grâce aux 4 cœurs, Quix étant mono-processus), ce qui rend le benchmark plus crédible.
+- Rappel : D1 (pas de rejeu du même jeu comme méthode principale, alternance live) et les 14 jours (7 par branche) restent ; l'option « rejouer 1 h » devient le test contrôlé de D23.
