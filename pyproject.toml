@@ -30,6 +30,7 @@ spark = [
 ]
 dagster = [
     "dagster>=1.13,<1.14",
+    "dagster-dbt>=0.29,<0.30",
     "dagster-postgres",
     "dbt-core>=1.12,<1.13",
     "dbt-duckdb>=1.11,<1.12",
@@ -47,6 +48,7 @@ dev = [
     "pytest",
     "ruff",
     "pre-commit",
+    "dagster-webserver>=1.13,<1.14",
 ]
 
 [tool.pytest.ini_options]
@@ -65,3 +67,7 @@ select = [
     "B",   # Likely bugs (flake8-bugbear)
 ]
 fixable = ["ALL"] # Allow ruff to auto-fix everything it can
+
+[tool.ruff.lint.isort]
+# src/dagster/ would otherwise make `dagster` look like a first-party package
+known-third-party = ["dagster", "dagster_dbt"]

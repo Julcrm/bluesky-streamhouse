@@ -1,0 +1,18 @@
+# Dagster instance of the bluesky_duckdb code server: the same Postgres storage as the
+# shared dagster-workspace. Runs execute in this container (DefaultRunLauncher) and
+# write their events there.
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_POSTGRES_USER
+      password:
+        env: DAGSTER_POSTGRES_PASSWORD
+      hostname:
+        env: DAGSTER_POSTGRES_HOST
+      db_name:
+        env: DAGSTER_POSTGRES_DB
+      port: 5432
+# Anonymous usage statistics off, like the workspace default for a private deployment
+telemetry:
+  enabled: false

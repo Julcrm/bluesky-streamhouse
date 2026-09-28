@@ -6,6 +6,7 @@ loaded from `.env` when present (local runs; containers get real env vars).
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -100,6 +101,20 @@ DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
 # DuckLake writes Snappy by default: zstd cuts Bronze from 213 to 121 B/row (decision D14).
 # Persisted in the catalog, applies to files written afterwards
 DUCKLAKE_PARQUET_COMPRESSION = "zstd"
+
+# --- Dagster, branch B (decision D20) ---
+# dbt project of branch B, found from this file (no absolute path, unlike velib)
+DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
+# Silver -> Gold every 15 min, same freshness contract as branch A
+DAGSTER_SCHEDULE_CRON = "*/15 * * * *"
+DAGSTER_TIMEZONE = "Europe/Paris"
+# A run retries on DuckLake's internal error when a Bronze scan races a Quix flush
+# (it invalidates the DuckDB instance; a fresh run starts clean)
+DAGSTER_RETRY_MAX = 2
+DAGSTER_RETRY_DELAY_SECONDS = 30
+# Upper bound on Silver catch-up passes in one run: 07:00 catch-up is ~19 M Bronze
+# rows, ~40 passes of 500 000 rows (silver_max_rows_per_run in dbt_project.yml)
+SILVER_MAX_CATCHUP_PASSES = 100
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10
