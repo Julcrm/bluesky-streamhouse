@@ -3,15 +3,13 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze)
+**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en contrôle de prod
 **Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Pousser** `feat/phase-2-quix-ducklake` (commit D15 du 2026-09-28, la PR vers `dev` est déjà ouverte). Ne pas définir `DUCKLAKE_DATA_INLINING_ROW_LIMIT` dans Coolify (le compose met 10 000 par défaut).
-> 2. **Variables Coolify** de la ressource bluesky-streamhouse : `POSTGRES_HOST=v8kok4w0oscgg0kc4csc88kw`, `POSTGRES_USER=postgres`, `POSTGRES_PASSWORD`, `AWS_ACCESS_KEY_ID=GK833d47708c077296e5a18b3a`, `AWS_SECRET_ACCESS_KEY` (clé `bluesky`, à lire avec `garage key info bluesky --show-secret`).
-> 3. Merge `dev` → `main` (démarre Quix en prod 24 h/24), puis contrôle en prod : rattrapage des 24 h du topic, RAM (limite 768 Mo), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, **B/ligne sur 24 h** (valide ou corrige l'estimation D14).
-> 4. En prod, surveiller aussi : latence des INSERT inlinés (logs `Bronze commit`), durée des flushes (`Inlined flush`), taille de la base `ducklake_catalog`. Puis **clore la phase 2** et attaquer la phase 3 (dbt-duckdb + Dagster).
-
+> 1. **Contrôle de la prod** (Quix redéployé le 2026-09-28 avec la limite d'inlining lue dans `config.py`) : conteneur `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `docker ps --filter name=quix`) sans redémarrage, RAM (limite 768 Mo), logs `Bronze commit` (latence des INSERT inlinés) et `Inlined flush` (toutes les 5 min), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, taille de la base `ducklake_catalog`, **B/ligne sur 24 h** (valide ou corrige D14).
+> 2. Entre 08:53 et 09:42 UTC, la prod a tourné **sans inlining** (PR #7 mergée dans `main` avant le commit D15) : quelques centaines de petits fichiers dans Bronze, sans conséquence, repris par la fusion de fichiers de la phase 3.
+> 3. Si le contrôle est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb + Dagster).
 ---
 
 ## Architecture cible
@@ -201,7 +199,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] `docker/quix/Dockerfile` (extensions DuckDB installées au build, chargées sans réseau ; image 208 Mo compressée) + service `quix` dans `docker-compose.yaml` (limite 768 Mo)
 - [x] Rétention et volumétrie décidées (D14)
 - [x] zstd + découpage `year/month/day(event_time)` dans le `setup()` du sink (D14), session DuckDB en UTC — 2026-09-28
-- [ ] **Avant de merger sur `main`** : variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`)
+- [x] Variables Coolify (`POSTGRES_*`, `AWS_*` de la clé `bluesky`) et merge sur `main` : Quix en prod le 2026-09-28
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
@@ -412,3 +410,11 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Run local de 11 min** (rattrapage de ~28 min puis live) : le rattrapage (lots de 50 000) écrit du Parquet direct (6-9 Mo par fichier, ~400 ms). En live, **INSERT inliné de ~1 200 lignes : p50 595 ms, p95 794 ms** (contre 80-300 ms en Parquet direct), soit ~12 % du checkpoint de 5 s. **Flushes : 56 650 et 64 215 lignes en 1,2 et 1,4 s**, un fichier de 7-8 Mo par flush au lieu de ~60 fichiers de 0,3 Mo. **126 B/ligne** sur le fichier de flush (contre 168 pour les petits fichiers live). **0 doublon, 0 offset manquant** sur 764 k lignes.
 - Les fichiers issus du flush portent le snapshot du **premier INSERT inliné** (`begin_snapshot`), pas celui du flush : le time travel est préservé. Filtrer par `processed_at`, pas par snapshot, pour dater une écriture.
 - `test_connect_round_trip_on_local_stack` fixe maintenant la limite à 10 pour garder son chemin Parquet.
+
+### 2026-09-28 — Mise en prod de la branche B
+- La **PR #7 visait `main`** (et non `dev`) et a été mergée avant le commit D15 : déploiement à 08:53 UTC avec D14 seulement, donc sans inlining pendant ~50 min. `dev` réaligné sur `main`, puis D15 mergé `feat` → `dev` → `main`.
+- **CI rouge sur D15** : le retry d'un flush raté remettait `_last_inlined_flush` à `0.0`, or `time.monotonic()` compte depuis le démarrage de la machine. Sur un runner GitHub démarré depuis moins d'une heure, le retry attendait tout un intervalle (même risque sur un VPS qui vient de redémarrer). Passé sur mon Mac, qui tournait depuis des jours. Corrigé avec `float("-inf")`, diagnostic confirmé en simulant `monotonic() = 100`.
+- **Déployé le 2026-09-28 à 09:42 UTC** (`e6cfe7e`) : CI verte, déploiement Coolify OK. Contrôle de la prod à faire.
+- Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
+- **Correctif** : `DUCKLAKE_DATA_INLINING_ROW_LIMIT` et `QUIX_AUTO_OFFSET_RESET` retirés du compose (valeurs dans `config.py` seulement, réglages de benchmark versionnés) et supprimés dans Coolify par Julien. Règle : pas de `${VAR:-défaut}` dans le compose pour un réglage qui doit suivre le code.
+- En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
