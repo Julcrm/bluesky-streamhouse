@@ -298,6 +298,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [ ] `docker/spark/Dockerfile` (JVM, jars pré-téléchargés dans l'image, pas au runtime)
 - [ ] Tests des transformations avec une SparkSession locale
 - [ ] **Checklist de réglage Spark, documentée** (crédibilité du benchmark : pas d'homme de paille) : `spark.sql.shuffle.partitions` = nombre de cœurs (le défaut, 200, est absurde à ce volume) ; AQE activé ; mémoire driver/exécuteur dimensionnée sous la même limite Docker que B ; `maxOffsetsPerTrigger` = 50 000 (même plafond que Quix, D13) ; trigger de 5 s ; Iceberg : `write.target-file-size-bytes`, distribution d'écriture, zstd comme B (D14). Chaque réglage avec sa raison et, si possible, la mesure avant/après
+- [ ] **Décider tôt des limites mémoire si Spark ne tient pas** sous celles de B (Quix 768 Mo, code server 1,5 Go) : soit relever les limites **des deux branches** à l'identique (le contrat reste le même), soit documenter l'impossibilité comme un résultat. Trancher avant la phase 7, pas pendant
 
 **Fini quand :** la table Iceberg Bronze se remplit et reprend proprement depuis le checkpoint.
 **Pièges :** un trigger de 5 s donne environ 17 000 commits/jour, donc explosion des petits fichiers et des métadonnées (la maintenance est obligatoire). Le catalogue `hadoop` supporte un seul writer.
@@ -352,6 +353,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] Limites CPU/RAM Docker identiques pour les deux branches
 - [ ] Comparer aussi à jour de semaine équivalent (lundi A contre lundi B)
 - [ ] **Échantillon figé** : ~20 min de `raw_events` copiées une fois dans un topic dédié à rétention illimitée (~0,3 Go), jamais modifié
+- [ ] **Outils du benchmark testés comme le reste** (collecteur, rejeu, calculs) : tests unitaires et un essai à blanc avant la première journée de mesure ; un bug dans le collecteur fausserait tout sans bruit. Toute correction pendant la période de mesure = la période recommence
 - [ ] **Test contrôlé hebdomadaire (D23)** : `benchmark/replay.py` qui rejoue l'échantillon à un débit cible (1×, 4×) ou sans limite (max) ; semaine 1 = 1×, 4×, max ; ensuite 4× et max ; 3 répétitions par débit ; A et B sur deux nuits consécutives (~20:00 → 01:30), ordre alterné chaque semaine ; mêmes limites Docker ; tables de sortie isolées puis supprimées. Mesures : ms CPU/message, Mo·s/10 000 messages, débit, latence p50/p95, **plus les métriques d'état** (taille du catalogue, nombre de fichiers et de snapshots, métadonnées Iceberg). Jobs Dagster hebdomadaires, un par branche
 - [ ] **Comparaison directe A/B sur les mêmes données** et **parité des sorties** : tables Gold de A et B identiques sur l'échantillon (même contenu, pas seulement même schéma), vérifiée chaque semaine
 - [ ] **Dérive dans le temps (H8)** : évolution semaine après semaine des coûts sur le même échantillon, reliée aux métriques d'état
@@ -386,7 +388,7 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - [ ] README : Architecture, Stack, Project structure, **Benchmark results**, Tests, CI, Deployment
 - [ ] `docs/adr/` : une ADR par décision (D1 à D23 et suivantes)
 - [ ] Rédaction des conclusions du benchmark (article ou page portfolio) : chaque hypothèse H1-H7 et son verdict, le point de bascule, **3 résultats chiffrés en tête du README**
-- [ ] **Section « Limites »** : un seul nœud (choix assumé : la taille réelle de la plupart des charges), VPS partagé et voisins bruyants, catalogue DuckLake sur un Postgres partagé (D12), jours différents entre branches (compensé par D1 + D23), ce que le benchmark **ne prouve pas** (comportement sur un cluster)
+- [ ] **Section « Limites »** : un seul nœud (choix assumé : la taille réelle de la plupart des charges), VPS partagé et voisins bruyants, catalogue DuckLake sur un Postgres partagé (D12), jours différents entre branches (compensé par D1 + D23), ce que le benchmark **ne prouve pas** (comportement sur un cluster). **Résultats en fourchettes et ordres de grandeur** (petits échantillons : 7 jours par branche, quelques semaines de tests), pas de fausse précision (« 3,27× ») ni de p-values
 - [ ] **Données brutes et scripts publiés** (`benchmark_windows`, résultats du test contrôlé, requêtes de calcul) pour que les chiffres soient refaisables
 - [ ] Article anticipé possible dès maintenant sur les découvertes DuckLake (compteur de snapshots au niveau du catalogue, coût de l'inlining, bug du scan des lignes inlinées), sans attendre la branche A
 
