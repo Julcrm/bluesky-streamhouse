@@ -11,7 +11,10 @@
 -- Bronze snapshot range to read: (last snapshot already read or none, snapshot to read up to).
 -- A run reads at most var('silver_max_rows_per_run') Bronze rows, whole snapshots only
 -- and at least one: dbt stages the batch in a temp table, so an unbounded batch (the
--- 07:00 catch-up, D10) would overflow the container. The caller repeats the run until
+-- 07:00 catch-up, D10, or a first run on days of Bronze) would overflow the container.
+-- A first run counts from the oldest snapshot still kept. Rows written before it (once
+-- the maintenance has expired snapshots) are not counted and all come in that first
+-- batch: a full refresh after expiry is not capped. The caller repeats the run until
 -- `bronze_snapshot_id` reaches the current snapshot
 {% macro bronze_snapshot_range() %}
     {%- if not execute -%}
@@ -27,14 +30,21 @@
             "SELECT max(bronze_snapshot_id) FROM " ~ this
         ).columns[0].values()[0] -%}
     {%- endif -%}
-    {%- if last_read is none or last_read >= current -%}
+    {%- if last_read is not none and last_read >= current -%}
         {{ return((last_read, current)) }}
+    {%- endif -%}
+    {%- if last_read is none -%}
+        {%- set read_from = run_query(
+            "SELECT min(snapshot_id) FROM ducklake_snapshots('" ~ bronze.database ~ "')"
+        ).columns[0].values()[0] -%}
+    {%- else -%}
+        {%- set read_from = last_read + 1 -%}
     {%- endif -%}
     {%- set read_up_to = run_query(
         "WITH per_snapshot AS ("
         ~ " SELECT snapshot_id, count(*) AS n"
         ~ " FROM ducklake_table_changes('" ~ bronze.database ~ "', '" ~ bronze.schema ~ "', '"
-        ~ bronze.identifier ~ "', " ~ (last_read + 1) ~ ", " ~ current ~ ")"
+        ~ bronze.identifier ~ "', " ~ read_from ~ ", " ~ current ~ ")"
         ~ " WHERE change_type = 'insert' GROUP BY 1"
         ~ "), running AS ("
         ~ " SELECT snapshot_id, sum(n) OVER (ORDER BY snapshot_id) AS total FROM per_snapshot"
@@ -47,7 +57,7 @@
 
 
 -- Bronze rows not read yet, stamped with the snapshot this run reads up to.
--- First run (or empty model): the whole table as of the current snapshot, uncapped.
+-- First run (or empty model): the whole table as of the snapshot this run reads up to.
 {% macro bronze_new_rows() %}
     {%- set bronze = source('bronze', 'bronze_events') -%}
     {%- set last_read, read_up_to = bronze_snapshot_range() -%}
