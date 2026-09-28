@@ -3,13 +3,27 @@
 > Fil rouge du projet, à relire en début de session et à mettre à jour en fin de session.
 > Référence de structure et de propreté : [velib-lakehouse](https://github.com/Julcrm/velib-lakehouse).
 
-**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en contrôle de prod
+**Phase en cours :** 2 — Branche B : Quix Streams → DuckLake (Bronze), en prod depuis le 2026-09-28, audit final à faire
 **Dernière mise à jour :** 2026-09-28
 
 > **Prochaine session : commencer ici**
-> 1. **Contrôle de la prod** (Quix redéployé le 2026-09-28 avec la limite d'inlining lue dans `config.py`) : conteneur `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `docker ps --filter name=quix`) sans redémarrage, RAM (limite 768 Mo), logs `Bronze commit` (latence des INSERT inlinés) et `Inlined flush` (toutes les 5 min), fichiers zstd rangés par jour sur Garage, 0 offset manquant dans Bronze, taille de la base `ducklake_catalog`, **B/ligne sur 24 h** (valide ou corrige D14).
-> 2. Entre 08:53 et 09:42 UTC, la prod a tourné **sans inlining** (PR #7 mergée dans `main` avant le commit D15) : quelques centaines de petits fichiers dans Bronze, sans conséquence, repris par la fusion de fichiers de la phase 3.
-> 3. Si le contrôle est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb + Dagster).
+> 1. **Audit des offsets en prod** (3 redémarrages de déploiement le 2026-09-28, dernier critère de la phase 2), depuis le VPS :
+>    ```bash
+>    Q=$(docker ps -q --filter name=quix)
+>    docker exec $Q /app/.venv/bin/python -c "
+>    from src.resources.ducklake import connect
+>    c = connect(read_only=True)
+>    print(c.execute('''SELECT kafka_partition, count(*) AS rows_,
+>      count(*) - count(DISTINCT kafka_offset) AS dup,
+>      max(kafka_offset) - min(kafka_offset) + 1 - count(DISTINCT kafka_offset) AS missing
+>      FROM lake.main.bronze_events GROUP BY 1 ORDER BY 1''').fetchall())"
+>    ```
+>    Attendu : `missing = 0` sur les 3 partitions (quelques `dup` tolérés, retirés en Silver).
+> 2. **Bilan sur 24 h** : 0 redémarrage (`docker inspect -f '{{.RestartCount}}' $Q`), RAM (limite 768 Mo), `Inlined flush` toutes les 5 min sans `WARN`, fichiers zstd rangés par jour sur Garage, taille de la base `ducklake_catalog`, **B/ligne réel** (valide ou corrige l'estimation D14 de ~55 Go).
+> 3. Si tout est bon : **clore la phase 2**, puis phase 3 (dbt-duckdb Silver/Gold + Dagster, maintenance DuckLake avec la rétention D14).
+> 4. Pousser les commits de doc restés en local sur `feat/phase-2-quix-ducklake`.
+>
+> Rappels : le conteneur s'appelle `quix-nji5…` (Coolify ignore `container_name`, filtrer avec `--filter name=quix`) ; lancer Python avec `/app/.venv/bin/python` ; jamais de `${VAR:-défaut}` dans le compose pour un réglage de benchmark (Coolify le fige au premier déploiement). Entre 08:53 et 09:55 UTC le 2026-09-28, la prod a tourné sans inlining : petits fichiers dans Bronze, repris par la fusion de fichiers de la phase 3.
 ---
 
 ## Architecture cible
@@ -203,6 +217,7 @@ Les décisions tranchées sont reportées dans le journal, avec leur justificati
 - [x] Tests unitaires du parsing et de la conversion Arrow, plus test d'intégration du sink (1 checkpoint sur 3 partitions = 1 snapshot DuckLake)
 
 **Fini quand :** la table Bronze se remplit en continu et un redémarrage ne crée pas de trou.
+**État au 2026-09-28 :** Bronze se remplit en prod (inlining + flush OK) ; audit des offsets après les redémarrages de déploiement à faire.
 
 ### Phase 3 — Branche B : dbt-duckdb (Silver / Gold) + Dagster
 **Objectif :** medallion complet sur la branche B, orchestré.
@@ -417,4 +432,6 @@ calculés sur la même fenêtre glissante de 5 minutes pour les deux branches.
 - **Déployé le 2026-09-28 à 09:42 UTC** (`e6cfe7e`) : CI verte, déploiement Coolify OK. Contrôle de la prod à faire.
 - Règle : vérifier la **branche cible** d'une PR (`dev`) avant de la merger.- **Contrôle de 09:49 UTC** : 0 redémarrage, 176 Mio / 768, ~6 % de CPU, ~1 100 lignes par checkpoint en **40-86 ms**. Mais **inlining inactif** : le flush de 09:48 a déplacé 0 ligne, et `docker exec … env` montrait `DUCKLAKE_DATA_INLINING_ROW_LIMIT=10`. **Piège Coolify** : chaque `${VAR:-défaut}` du compose est enregistré comme variable de la ressource au premier déploiement (ici `:-10`, PR #7), puis injecté à chaque déploiement ; changer le défaut dans le compose n'a plus d'effet.
 - **Correctif** : `DUCKLAKE_DATA_INLINING_ROW_LIMIT` et `QUIX_AUTO_OFFSET_RESET` retirés du compose (valeurs dans `config.py` seulement, réglages de benchmark versionnés) et supprimés dans Coolify par Julien. Règle : pas de `${VAR:-défaut}` dans le compose pour un réglage qui doit suivre le code.
-- En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.- **Contrôle après correctif (10:01 UTC)** : variable absente de l'environnement, limite lue = 10 000 (`/app/.venv/bin/python`, le `python` système de l'image n'a pas les dépendances). **INSERT inliné en prod : 350-640 ms (~450 ms)** par checkpoint de ~1 350 lignes, contre ~50 ms en Parquet direct (×9) ; le checkpoint s'étire de ~5,1 à ~5,5 s. **Flush : 70 842 lignes en 1,34 s** toutes les 5 min. Coût à reporter dans le benchmark face au gain en fichiers (1 fichier par jour et par flush au lieu de ~55).
+- En prod, le Parquet direct ne coûte que ~50 ms par checkpoint (Garage sur la même machine, contre 80-300 ms sur le Mac) : la latence de l'INSERT inliné est à remesurer en prod avant de comparer.
+- **Contrôle après correctif (10:01 UTC)** : variable absente de l'environnement, limite lue = 10 000 (`/app/.venv/bin/python`, le `python` système de l'image n'a pas les dépendances). **INSERT inliné en prod : 350-640 ms (~450 ms)** par checkpoint de ~1 350 lignes, contre ~50 ms en Parquet direct (×9) ; le checkpoint s'étire de ~5,1 à ~5,5 s. **Flush : 70 842 lignes en 1,34 s** toutes les 5 min. Coût à reporter dans le benchmark face au gain en fichiers (1 fichier par jour et par flush au lieu de ~55).
+- **Fin de session** : audit des offsets en prod non lancé (requête prête dans « Prochaine session »). Phase 2 à clore après l'audit et le bilan de 24 h.
