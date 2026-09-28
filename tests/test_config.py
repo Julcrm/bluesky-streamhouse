@@ -27,7 +27,8 @@ def test_storage_paths_follow_bucket(monkeypatch) -> None:
     try:
         assert config.ICEBERG_WAREHOUSE == "s3a://test-bucket/iceberg"
         assert config.SPARK_CHECKPOINT_PATH == "s3a://test-bucket/checkpoints/spark"
-        assert config.DUCKLAKE_DATA_PATH == "s3://test-bucket/ducklake/"
+        assert config.DUCKLAKE_BRONZE_DATA_PATH == "s3://test-bucket/ducklake/bronze/"
+        assert config.DUCKLAKE_TRANSFORM_DATA_PATH == "s3://test-bucket/ducklake/transform/"
     finally:
         monkeypatch.delenv("BUCKET")
         importlib.reload(src.config)

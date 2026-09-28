@@ -1,0 +1,91 @@
+version: 2
+
+# Gold keeps 30 days (D14) and is small (thousands of rows a day): tests scan it whole.
+# Every row carries silver_snapshot_id, the transform catalog snapshot its hour was rebuilt at (D19).
+
+models:
+  - name: gold_activity_minute
+    description: "Creations and deletions per UTC minute and collection."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [minute, collection]
+    columns:
+      - name: minute
+        tests: [not_null]
+      - name: collection
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - app.bsky.feed.post
+                  - app.bsky.feed.like
+                  - app.bsky.feed.repost
+                  - app.bsky.graph.follow
+      - name: creates
+        tests: [not_null]
+      - name: deletes
+        tests: [not_null]
+
+  - name: gold_langs_hour
+    description: "New posts per UTC hour and primary language subtag ('und' when none)."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [hour, lang]
+    columns:
+      - name: hour
+        tests: [not_null]
+      - name: lang
+        tests: [not_null]
+      - name: posts
+        tests: [not_null]
+
+  - name: gold_hashtags_hour
+    description: "Top hashtags per UTC hour (var gold_top_hashtags), ranked in Gold."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [hour, hashtag]
+      - unique_combination:
+          arguments:
+            columns: [hour, rank]
+    columns:
+      - name: hour
+        tests: [not_null]
+      - name: hashtag
+        tests: [not_null]
+      - name: rank
+        tests: [not_null]
+
+  - name: gold_active_users_hour
+    description: "Distinct active accounts per UTC hour, per collection and 'all' (exact, D17)."
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [hour, collection]
+    columns:
+      - name: hour
+        tests: [not_null]
+      - name: collection
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - all
+                  - app.bsky.feed.post
+                  - app.bsky.feed.like
+                  - app.bsky.feed.repost
+                  - app.bsky.graph.follow
+      - name: active_accounts
+        tests: [not_null]
+
+  - name: gold_engagement_hour
+    description: "Likes, reposts, replies, quotes, deletions and net values per UTC hour."
+    columns:
+      - name: hour
+        tests: [not_null, unique]
+      - name: likes
+        tests: [not_null]
+      - name: net_likes
+        description: "Likes minus unlikes in the hour; negative when many older likes are removed"

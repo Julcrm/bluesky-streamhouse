@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix dbt-build dbt-parse clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -60,6 +60,15 @@ produce: check_uv
 
 quix: check_uv
 	uv run python -m src.processing.quix.app
+
+# Branch B Silver/Gold on the local DuckLake (dbt does not read .env itself)
+DBT_DUCKDB = set -a && . ./.env && set +a && cd dbt/duckdb && uv run dbt
+
+dbt-build: check_uv
+	$(DBT_DUCKDB) build --profiles-dir .
+
+dbt-parse: check_uv
+	cd dbt/duckdb && uv run dbt parse --profiles-dir .
 
 clean:
 	rm -rf .venv
