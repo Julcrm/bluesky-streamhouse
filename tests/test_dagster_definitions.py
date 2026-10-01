@@ -145,3 +145,25 @@ def test_every_asset_sits_in_the_project_folder() -> None:
     for key in graph.get_all_asset_keys():
         assert key.path[0] == "bluesky" and key.path[1] in layers, key
         assert graph.get(key).group_name == key.path[1], key
+
+
+def test_reaper_closes_unfinished_runs_of_this_location_only() -> None:
+    """At code server startup, runs left STARTED or CANCELING by the previous container
+    are closed; finished runs and other projects' runs are left alone."""
+    from src.dagster.definitions import defs, silver_gold_job
+    from src.dagster.reap_runs import reap_orphan_runs
+
+    with instance_for_test() as instance:
+        job = defs.get_job_def(silver_gold_job.name)
+        started = instance.create_run_for_job(job_def=job, status=DagsterRunStatus.STARTED)
+        canceling = instance.create_run_for_job(job_def=job, status=DagsterRunStatus.CANCELING)
+        other = instance.create_run_for_job(job_def=job, status=DagsterRunStatus.STARTED)
+        done = instance.create_run_for_job(job_def=job, status=DagsterRunStatus.SUCCESS)
+        reaped = reap_orphan_runs(instance, is_ours=lambda run: run.run_id != other.run_id)
+        status = {r: instance.get_run_by_id(r).status for r in (started.run_id, canceling.run_id)}
+
+        assert set(reaped) == {started.run_id, canceling.run_id}
+        assert status[started.run_id] == DagsterRunStatus.FAILURE
+        assert status[canceling.run_id] == DagsterRunStatus.CANCELED
+        assert instance.get_run_by_id(other.run_id).status == DagsterRunStatus.STARTED
+        assert instance.get_run_by_id(done.run_id).status == DagsterRunStatus.SUCCESS
