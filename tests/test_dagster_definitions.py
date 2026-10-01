@@ -26,8 +26,8 @@ def test_definitions_load() -> None:
 
     job = defs.get_job_def(silver_gold_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
-    assert "quix_bronze" in keys
-    assert {"silver/silver_posts", "gold/gold_hashtags_hour"} <= keys
+    assert "bluesky/bronze/quix_bronze" in keys
+    assert {"bluesky/silver/silver_posts", "bluesky/gold/gold_hashtags_hour"} <= keys
     assert len(defs.get_repository_def().asset_graph.asset_check_keys) > 0
 
 
@@ -83,3 +83,65 @@ def test_runs_of_other_locations_do_not_block() -> None:
     from src.dagster.definitions import blocks_schedule
 
     assert not blocks_schedule(_run_from("velib_lakehouse", "velib_pipeline_job"))
+
+
+def test_maintenance_job_loads() -> None:
+    """Both catalogs, storage with its two blocking checks, run purge; one alert sensor."""
+    from src.dagster.definitions import defs, maintenance_job
+
+    job = defs.get_job_def(maintenance_job.name)
+    keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
+    assert keys == {
+        "bluesky/maintenance/bronze_maintenance",
+        "bluesky/maintenance/transform_maintenance",
+        "bluesky/maintenance/lake_storage",
+        "bluesky/maintenance/dagster_run_purge",
+    }
+    checks = {key.name for key in defs.get_repository_def().asset_graph.asset_check_keys}
+    assert {"bucket_under_alert", "catalog_under_alert"} <= checks
+    assert defs.get_sensor_def("failure_alert_sensor") is not None
+
+
+def test_maintenance_schedule_skips_while_previous_maintenance_runs() -> None:
+    """Two maintenance runs would CHECKPOINT the same catalogs at once."""
+    from src.dagster.definitions import defs, maintenance_job, maintenance_schedule
+
+    with instance_for_test() as instance:
+        assert isinstance(
+            maintenance_schedule(build_schedule_context(instance=instance)), RunRequest
+        )
+        instance.create_run_for_job(
+            job_def=defs.get_job_def(maintenance_job.name), status=DagsterRunStatus.STARTED
+        )
+        result = maintenance_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, SkipReason)
+
+
+def test_purge_only_counts_runs_of_this_location() -> None:
+    """The instance is shared with velib: its runs are never purged."""
+    from src.dagster.runs import in_location
+
+    assert in_location(_run_from("bluesky_duckdb"))
+    assert not in_location(_run_from("velib_lakehouse", "velib_pipeline_job"))
+    assert not in_location(SimpleNamespace(remote_job_origin=None, job_name="x"))
+
+
+def test_failure_email_skipped_without_configuration(monkeypatch) -> None:
+    """No Resend key or recipient: nothing is sent, the sensor only logs."""
+    from src import config
+    from src.dagster.sensors import send_failure_email
+
+    monkeypatch.setattr(config, "RESEND_API_KEY", "")
+    assert send_failure_email("run", "job", "error") is False
+
+
+def test_every_asset_sits_in_the_project_folder() -> None:
+    """The Dagster catalog is shared with velib: every key starts with `bluesky/<layer>`,
+    and each layer is an asset group."""
+    from src.dagster.definitions import defs
+
+    graph = defs.get_repository_def().asset_graph
+    layers = {"bronze", "silver", "gold", "maintenance"}
+    for key in graph.get_all_asset_keys():
+        assert key.path[0] == "bluesky" and key.path[1] in layers, key
+        assert graph.get(key).group_name == key.path[1], key
