@@ -43,4 +43,5 @@ RUN .venv/bin/dbt parse --project-dir dbt/duckdb --profiles-dir dbt/duckdb
 
 EXPOSE 4000
 
-CMD [".venv/bin/dagster", "api", "grpc", "-h", "0.0.0.0", "-p", "4000", "-m", "src.dagster.definitions"]
+# Close the runs the previous container left STARTED (they died with it), then serve
+CMD ["sh", "-c", ".venv/bin/python -m src.dagster.reap_runs && exec .venv/bin/dagster api grpc -h 0.0.0.0 -p 4000 -m src.dagster.definitions"]
