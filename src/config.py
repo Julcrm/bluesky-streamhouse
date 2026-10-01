@@ -105,6 +105,9 @@ DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 # --- Dagster, branch B (decision D20) ---
 # Code location name in the dagster-workspace workspace.yaml
 DAGSTER_CODE_LOCATION = "bluesky_duckdb"
+# Every asset key starts with it: one folder per project in the shared Dagster catalog
+# (velib-lakehouse uses `velib`), then one per layer (bronze, silver, gold, maintenance)
+DAGSTER_ASSET_PREFIX = "bluesky"
 # dbt project of branch B, found from this file (no absolute path, unlike velib)
 DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
 # Silver -> Gold every 15 min, same freshness contract as branch A

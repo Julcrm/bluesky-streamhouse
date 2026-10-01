@@ -15,6 +15,7 @@ from dagster import (
     AssetCheckSeverity,
     AssetCheckSpec,
     AssetExecutionContext,
+    AssetKey,
     DagsterRunStatus,
     Failure,
     MaterializeResult,
@@ -29,6 +30,8 @@ from src.processing.backlog import GOLD_SCHEMA, gold_positions, silver_positions
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
 
 GROUP = "maintenance"
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, GROUP]
+LAKE_STORAGE_KEY = AssetKey([*KEY_PREFIX, "lake_storage"])
 SILVER_GOLD_JOB = "bluesky_silver_gold"
 FINISHED_RUN_STATUSES = [
     DagsterRunStatus.SUCCESS,
@@ -98,7 +101,11 @@ def _maintain(
     )
 
 
-@asset(group_name=GROUP, description="Bronze retention (7 days) and CHECKPOINT (D14, D21).")
+@asset(
+    group_name=GROUP,
+    key_prefix=KEY_PREFIX,
+    description="Bronze retention (7 days) and CHECKPOINT (D14, D21).",
+)
 def bronze_maintenance(context: AssetExecutionContext) -> MaterializeResult:
     _wait_for_silver_gold(context)
     bronze_settings = DuckLakeSettings()
@@ -117,6 +124,7 @@ def bronze_maintenance(context: AssetExecutionContext) -> MaterializeResult:
 
 @asset(
     group_name=GROUP,
+    key_prefix=KEY_PREFIX,
     description="Silver (7 days) and Gold (30 days) retention, CHECKPOINT of the transform "
     "catalog (D14, D21).",
 )
@@ -142,12 +150,13 @@ def transform_maintenance(context: AssetExecutionContext) -> MaterializeResult:
 
 @asset(
     group_name=GROUP,
+    key_prefix=KEY_PREFIX,
     # Not chained to each other: a Bronze failure must not stop the transform catalog
     deps=[bronze_maintenance, transform_maintenance],
     description="Bucket and catalog database sizes after maintenance, with alert thresholds.",
     check_specs=[
-        AssetCheckSpec("bucket_under_alert", asset="lake_storage", blocking=True),
-        AssetCheckSpec("catalog_under_alert", asset="lake_storage", blocking=True),
+        AssetCheckSpec("bucket_under_alert", asset=LAKE_STORAGE_KEY, blocking=True),
+        AssetCheckSpec("catalog_under_alert", asset=LAKE_STORAGE_KEY, blocking=True),
     ],
 )
 def lake_storage(context: AssetExecutionContext) -> MaterializeResult:
@@ -185,6 +194,7 @@ def lake_storage(context: AssetExecutionContext) -> MaterializeResult:
 
 @asset(
     group_name=GROUP,
+    key_prefix=KEY_PREFIX,
     deps=[lake_storage],
     description="Delete finished Dagster runs of this code location older than 30 days (D20).",
 )

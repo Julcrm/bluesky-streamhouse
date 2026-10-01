@@ -26,8 +26,8 @@ def test_definitions_load() -> None:
 
     job = defs.get_job_def(silver_gold_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
-    assert "quix_bronze" in keys
-    assert {"silver/silver_posts", "gold/gold_hashtags_hour"} <= keys
+    assert "bluesky/bronze/quix_bronze" in keys
+    assert {"bluesky/silver/silver_posts", "bluesky/gold/gold_hashtags_hour"} <= keys
     assert len(defs.get_repository_def().asset_graph.asset_check_keys) > 0
 
 
@@ -92,10 +92,10 @@ def test_maintenance_job_loads() -> None:
     job = defs.get_job_def(maintenance_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     assert keys == {
-        "bronze_maintenance",
-        "transform_maintenance",
-        "lake_storage",
-        "dagster_run_purge",
+        "bluesky/maintenance/bronze_maintenance",
+        "bluesky/maintenance/transform_maintenance",
+        "bluesky/maintenance/lake_storage",
+        "bluesky/maintenance/dagster_run_purge",
     }
     checks = {key.name for key in defs.get_repository_def().asset_graph.asset_check_keys}
     assert {"bucket_under_alert", "catalog_under_alert"} <= checks
@@ -133,3 +133,15 @@ def test_failure_email_skipped_without_configuration(monkeypatch) -> None:
 
     monkeypatch.setattr(config, "RESEND_API_KEY", "")
     assert send_failure_email("run", "job", "error") is False
+
+
+def test_every_asset_sits_in_the_project_folder() -> None:
+    """The Dagster catalog is shared with velib: every key starts with `bluesky/<layer>`,
+    and each layer is an asset group."""
+    from src.dagster.definitions import defs
+
+    graph = defs.get_repository_def().asset_graph
+    layers = {"bronze", "silver", "gold", "maintenance"}
+    for key in graph.get_all_asset_keys():
+        assert key.path[0] == "bluesky" and key.path[1] in layers, key
+        assert graph.get(key).group_name == key.path[1], key
