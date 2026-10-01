@@ -62,9 +62,10 @@
 {% endmacro %}
 
 
--- Distinct UTC hours of the rows inserted into `silver_models` in (last_read, current],
--- as SQL TIMESTAMPTZ literals; none means "all hours" (first run)
-{% macro touched_hours(silver_models, last_read, current) %}
+-- UTC hours of the rows inserted into `silver_models` in (last_read, current], merged
+-- into ranges of consecutive hours: [(start, end), ...] as TIMESTAMPTZ literals, end
+-- excluded; none means "all hours" (first run)
+{% macro touched_ranges(silver_models, last_read, current) %}
     {%- if not execute or last_read is none -%}
         {{ return(none) }}
     {%- endif -%}
@@ -80,29 +81,45 @@
             ~ rel.identifier ~ "', " ~ (last_read + 1) ~ ", " ~ current ~ ")"
         ) -%}
     {%- endfor -%}
-    {%- set hours = run_query(
-        "SELECT DISTINCT strftime(hour, '%Y-%m-%d %H:00:00+00') FROM ("
-        ~ selects | join(" UNION ALL ") ~ ") ORDER BY 1"
-    ).columns[0].values() -%}
-    {{ return(hours | list) }}
+    {#- Gaps and islands: consecutive hours share hour - row_number() hours #}
+    {%- set rows = run_query(
+        "WITH hours AS (SELECT DISTINCT hour FROM (" ~ selects | join(" UNION ALL ") ~ ")),"
+        ~ " islands AS (SELECT hour, hour - to_hours(row_number() OVER (ORDER BY hour)) AS island"
+        ~ " FROM hours)"
+        ~ " SELECT strftime(min(hour), '%Y-%m-%d %H:00:00+00'),"
+        ~ " strftime(max(hour) + INTERVAL 1 HOUR, '%Y-%m-%d %H:00:00+00')"
+        ~ " FROM islands GROUP BY island ORDER BY 1"
+    ).rows -%}
+    {%- set ranges = [] -%}
+    {%- for r in rows -%}
+        {%- do ranges.append((r[0], r[1])) -%}
+    {%- endfor -%}
+    {{ return(ranges) }}
 {% endmacro %}
 
 
 -- Silver model frozen at the snapshot this run reads, restricted to the hours to rebuild.
--- The lower bound is a constant so DuckLake prunes the day-split files
-{% macro silver_for_hours(silver_model, hours, current) %}
+-- One bounded scan per range of hours: DuckLake skips files by their event_time min/max
+-- only on a plain range (an OR of ranges, or a lower bound alone, read every file since
+-- the oldest hour: 132 s per run on gold_active_users_hour during the 2026-10-01 catch-up)
+{% macro silver_for_hours(silver_model, ranges, current) %}
     (
+        {%- if ranges is none %}
         SELECT *
         FROM {{ ref(silver_model) }} AT (VERSION => {{ current }})
-        {%- if hours is not none %}
-        {%- if hours | length == 0 %}
+        {%- elif ranges | length == 0 %}
+        SELECT *
+        FROM {{ ref(silver_model) }} AT (VERSION => {{ current }})
         WHERE false
         {%- else %}
-        WHERE event_time >= TIMESTAMPTZ '{{ hours[0] }}'
-          AND date_trunc('hour', event_time) IN (
-              {%- for h in hours %}TIMESTAMPTZ '{{ h }}'{{ ", " if not loop.last }}{% endfor -%}
-          )
+        {%- for start, end in ranges %}
+        SELECT *
+        FROM {{ ref(silver_model) }} AT (VERSION => {{ current }})
+        WHERE event_time >= TIMESTAMPTZ '{{ start }}' AND event_time < TIMESTAMPTZ '{{ end }}'
+        {%- if not loop.last %}
+        UNION ALL
         {%- endif %}
+        {%- endfor %}
         {%- endif %}
     )
 {% endmacro %}

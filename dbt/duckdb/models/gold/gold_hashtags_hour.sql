@@ -9,13 +9,13 @@
 
 {%- set silver_models = ['silver_posts'] %}
 {%- set last_read, read_up_to = gold_snapshot_range(silver_models) %}
-{%- set hours = touched_hours(silver_models, last_read, read_up_to) %}
+{%- set ranges = touched_ranges(silver_models, last_read, read_up_to) %}
 
 WITH post_tags AS (
     SELECT
         date_trunc('hour', event_time)  AS hour,
         unnest(hashtags)                AS hashtag
-    FROM {{ silver_for_hours('silver_posts', hours, read_up_to) }}
+    FROM {{ silver_for_hours('silver_posts', ranges, read_up_to) }}
     WHERE operation = 'create'
       AND len(hashtags) > 0
 ),
