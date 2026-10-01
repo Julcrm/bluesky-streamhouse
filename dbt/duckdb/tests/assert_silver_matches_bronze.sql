@@ -1,5 +1,6 @@
 -- Assert that each Silver model holds exactly the distinct Bronze events visible at the
--- snapshot it read up to: no loss and no duplicate across incremental runs (D16).
+-- snapshot it read up to (its position in the progress table, else its rows' max): no
+-- loss and no duplicate across incremental runs (D16).
 -- Checked on the last day only (var recent_rows_window)
 
 {%- set models = [
@@ -14,7 +15,10 @@
 {%- set read_up_to = 0 %}
 {%- if execute %}
     {%- set read_up_to = run_query(
-        "SELECT coalesce(max(bronze_snapshot_id), 0) FROM " ~ ref(model)
+        "SELECT coalesce("
+        ~ "(SELECT max(bronze_snapshot_id) FROM " ~ silver_progress_table()
+        ~ " WHERE model = '" ~ model ~ "' AND done),"
+        ~ " (SELECT max(bronze_snapshot_id) FROM " ~ ref(model) ~ "), 0)"
     ).columns[0].values()[0] %}
 {%- endif %}
 

@@ -10,8 +10,8 @@
 -- =============================================================================
 
 {%- set silver_models = ['silver_posts', 'silver_likes', 'silver_reposts', 'silver_deletes'] %}
-{%- set last_read, current = gold_snapshot_range() %}
-{%- set hours = touched_hours(silver_models, last_read, current) %}
+{%- set last_read, read_up_to = gold_snapshot_range(silver_models) %}
+{%- set hours = touched_hours(silver_models, last_read, read_up_to) %}
 
 WITH posts AS (
     SELECT
@@ -20,20 +20,20 @@ WITH posts AS (
         count(*) FILTER (WHERE embed_type IN (
             'app.bsky.embed.record', 'app.bsky.embed.recordWithMedia'
         ))                                                      AS quotes
-    FROM {{ silver_for_hours('silver_posts', hours, current) }}
+    FROM {{ silver_for_hours('silver_posts', hours, read_up_to) }}
     WHERE operation = 'create'
     GROUP BY 1
 ),
 
 likes AS (
     SELECT date_trunc('hour', event_time) AS hour, count(*) AS likes
-    FROM {{ silver_for_hours('silver_likes', hours, current) }}
+    FROM {{ silver_for_hours('silver_likes', hours, read_up_to) }}
     GROUP BY 1
 ),
 
 reposts AS (
     SELECT date_trunc('hour', event_time) AS hour, count(*) AS reposts
-    FROM {{ silver_for_hours('silver_reposts', hours, current) }}
+    FROM {{ silver_for_hours('silver_reposts', hours, read_up_to) }}
     GROUP BY 1
 ),
 
@@ -43,7 +43,7 @@ deletes AS (
         count(*) FILTER (WHERE collection = 'app.bsky.feed.like')           AS likes_deleted,
         count(*) FILTER (WHERE collection = 'app.bsky.feed.repost')         AS reposts_deleted,
         count(*) FILTER (WHERE collection = 'app.bsky.feed.post')           AS posts_deleted
-    FROM {{ silver_for_hours('silver_deletes', hours, current) }}
+    FROM {{ silver_for_hours('silver_deletes', hours, read_up_to) }}
     GROUP BY 1
 ),
 
@@ -66,7 +66,7 @@ engagement AS (
         coalesce(d.posts_deleted, 0)                                AS posts_deleted,
         coalesce(l.likes, 0) - coalesce(d.likes_deleted, 0)         AS net_likes,
         coalesce(r.reposts, 0) - coalesce(d.reposts_deleted, 0)     AS net_reposts,
-        {{ current }}::BIGINT                                       AS silver_snapshot_id
+        {{ read_up_to }}::BIGINT                                    AS silver_snapshot_id
     FROM hours AS h
     LEFT JOIN posts AS p USING (hour)
     LEFT JOIN likes AS l USING (hour)
