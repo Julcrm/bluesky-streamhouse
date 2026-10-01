@@ -14,29 +14,29 @@
 -- =============================================================================
 
 {%- set silver_models = ['silver_posts', 'silver_likes', 'silver_reposts', 'silver_follows', 'silver_deletes'] %}
-{%- set last_read, current = gold_snapshot_range() %}
-{%- set hours = touched_hours(silver_models, last_read, current) %}
+{%- set last_read, read_up_to = gold_snapshot_range(silver_models) %}
+{%- set hours = touched_hours(silver_models, last_read, read_up_to) %}
 
 WITH events AS (
     SELECT 'app.bsky.feed.post' AS collection, event_time, 'create' AS operation
-    FROM {{ silver_for_hours('silver_posts', hours, current) }}
+    FROM {{ silver_for_hours('silver_posts', hours, read_up_to) }}
     WHERE operation = 'create'
 
     UNION ALL
     SELECT 'app.bsky.feed.like', event_time, 'create'
-    FROM {{ silver_for_hours('silver_likes', hours, current) }}
+    FROM {{ silver_for_hours('silver_likes', hours, read_up_to) }}
 
     UNION ALL
     SELECT 'app.bsky.feed.repost', event_time, 'create'
-    FROM {{ silver_for_hours('silver_reposts', hours, current) }}
+    FROM {{ silver_for_hours('silver_reposts', hours, read_up_to) }}
 
     UNION ALL
     SELECT 'app.bsky.graph.follow', event_time, 'create'
-    FROM {{ silver_for_hours('silver_follows', hours, current) }}
+    FROM {{ silver_for_hours('silver_follows', hours, read_up_to) }}
 
     UNION ALL
     SELECT collection, event_time, 'delete'
-    FROM {{ silver_for_hours('silver_deletes', hours, current) }}
+    FROM {{ silver_for_hours('silver_deletes', hours, read_up_to) }}
 ),
 
 per_minute AS (
@@ -45,7 +45,7 @@ per_minute AS (
         collection,
         count(*) FILTER (WHERE operation = 'create')    AS creates,
         count(*) FILTER (WHERE operation = 'delete')    AS deletes,
-        {{ current }}::BIGINT                           AS silver_snapshot_id
+        {{ read_up_to }}::BIGINT                        AS silver_snapshot_id
     FROM events
     GROUP BY ALL
 )
