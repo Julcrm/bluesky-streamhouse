@@ -21,12 +21,10 @@ def test_retention_is_24_hours() -> None:
 
 
 def test_storage_paths_follow_bucket(monkeypatch) -> None:
-    """Iceberg, Spark checkpoint and DuckLake paths are derived from BUCKET."""
+    """DuckLake data paths are derived from BUCKET (Iceberg's are set in Lakekeeper)."""
     monkeypatch.setenv("BUCKET", "test-bucket")
     config = importlib.reload(src.config)
     try:
-        assert config.ICEBERG_WAREHOUSE == "s3a://test-bucket/iceberg"
-        assert config.SPARK_CHECKPOINT_PATH == "s3a://test-bucket/checkpoints/spark"
         assert config.DUCKLAKE_BRONZE_DATA_PATH == "s3://test-bucket/ducklake/bronze/"
         assert config.DUCKLAKE_TRANSFORM_DATA_PATH == "s3://test-bucket/ducklake/transform/"
     finally:

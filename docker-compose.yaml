@@ -5,6 +5,9 @@
 #   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port)
 #   - bluesky-duckdb: branch B Dagster gRPC code server, Silver/Gold dbt assets
 #     (port 4000 on the coolify network only; the service name is its DNS alias)
+#   - lakekeeper (+ one-shot lakekeeper-migrate, lakekeeper-init): Iceberg REST
+#     catalog of branch A, database iceberg_catalog on the shared Postgres
+#   - spark: branch A, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
 # Services of later phases (Spark, API) are added here.
@@ -59,7 +62,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768M  # measured ~280 MiB after a 50k-row catch-up batch
+          # Same limit as Spark (contract): Spark needs ~700-740 MiB, 768 MB did not fit.
+          # Quix: ~250 MiB live, ~700 MiB in the 35 M-row catch-up of 2026-09-28
+          memory: 1G
     networks:
       - coolify
     restart: always
@@ -104,6 +109,98 @@ services:
     networks:
       - coolify
     restart: always
+
+  # --- Branch A -------------------------------------------------------------
+  # Iceberg REST catalog (Lakekeeper, Rust, ~30 MiB). Its RAM and CPU are part of
+  # branch A's fixed cost in the benchmark, as Postgres is for DuckLake
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    command: ["migrate"]
+    environment: &lakekeeper-env
+      - LAKEKEEPER__PG_DATABASE_URL_READ=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT:-5432}/iceberg_catalog
+      - LAKEKEEPER__PG_DATABASE_URL_WRITE=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT:-5432}/iceberg_catalog
+      # Encrypts the S3 credentials kept in the catalog database
+      - LAKEKEEPER__PG_ENCRYPTION_KEY=${LAKEKEEPER_ENCRYPTION_KEY}
+    networks:
+      - coolify
+    restart: "no"
+
+  # No port exposed: reachable on the coolify network only. No authentication yet:
+  # any container of this network could ask it to sign S3 requests on the bucket
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    command: ["serve"]
+    environment: *lakekeeper-env
+    expose:
+      - "8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 256M  # ~30 MiB measured
+    networks:
+      - coolify
+    restart: always
+
+  # Bootstrap + Iceberg warehouse on Garage, idempotent (docker/lakekeeper/init.sh)
+  lakekeeper-init:
+    build:
+      context: .
+      dockerfile: docker/lakekeeper/Dockerfile
+    environment:
+      - LAKEKEEPER_URL=http://lakekeeper:8181
+      - ICEBERG_WAREHOUSE=bluesky
+      - ICEBERG_KEY_PREFIX=iceberg
+      - BUCKET=${BUCKET:-bluesky-streamhouse}
+      - S3_ENDPOINT_URL=http://garage:3900
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+    networks:
+      - coolify
+    restart: "no"
+
+  # Spark Structured Streaming -> Iceberg Bronze. No S3 key: Lakekeeper signs
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # JVM sized for the 1 GB limit (tuning checklist): Spark's minimum heap is 450 MB,
+      # ~250 MB more for classes, JIT and threads; fail fast on OOM instead of hanging
+      - SPARK_DRIVER_MEMORY=480m
+      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
+      - MALLOC_ARENA_MAX=2
+    # Kafka offsets and batch ids: losing this volume means reading raw_events again
+    # from the oldest retained offset (duplicates in Bronze, removed in Silver)
+    volumes:
+      - spark-checkpoint:/app/state
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+    networks:
+      - coolify
+    restart: always
+
+volumes:
+  spark-checkpoint:
 
 networks:
   coolify:

@@ -5,7 +5,10 @@
 #   - redpanda-console: web UI for topics and consumer groups (localhost:8088)
 #   - garage:           S3-compatible object storage, single node (localhost:3900)
 #                       bucket + access key auto-created from .env on first start
-#   - postgres:         DuckLake catalog + Dagster storage (localhost:5432)
+#   - postgres:         DuckLake catalog, Iceberg catalog, Dagster storage (localhost:5432)
+#   - lakekeeper:       Iceberg REST catalog of branch A (localhost:8181), with its
+#                       one-shot migrate and init (bootstrap + warehouse on Garage)
+#   - spark:            branch A streaming job (profile `spark`: make spark)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
 # Credentials come from .env (created from .env.example by `make up`), local only.
@@ -85,6 +88,83 @@ services:
       timeout: 5s
       retries: 20
 
+  # Iceberg REST catalog of branch A (Postgres-backed), first migrated then initialised
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    command: ["migrate"]
+    environment: &lakekeeper-env
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${POSTGRES_USER:-streamhouse}:${POSTGRES_PASSWORD:-streamhouse}@postgres:5432/iceberg_catalog
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${POSTGRES_USER:-streamhouse}:${POSTGRES_PASSWORD:-streamhouse}@postgres:5432/iceberg_catalog
+      # Encrypts the storage credentials kept in the catalog database
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY:?set in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    container_name: bsh-lakekeeper
+    command: ["serve"]
+    environment: *lakekeeper-env
+    ports:
+      - "127.0.0.1:8181:8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+
+  lakekeeper-init:
+    build:
+      context: .
+      dockerfile: docker/lakekeeper/Dockerfile
+    environment:
+      LAKEKEEPER_URL: http://lakekeeper:8181
+      ICEBERG_WAREHOUSE: bluesky
+      ICEBERG_KEY_PREFIX: iceberg
+      BUCKET: ${BUCKET:-bluesky-streamhouse}
+      # The endpoint Lakekeeper hands to its clients: containers of this network
+      S3_ENDPOINT_URL: http://garage:3900
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    restart: "no"
+
+  # Branch A streaming job. Runs in the network because Lakekeeper hands out
+  # http://garage:3900, which the host cannot resolve
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    container_name: bsh-spark
+    profiles: ["spark"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_DRIVER_MEMORY: 480m
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - spark-checkpoint:/app/state
+    mem_limit: 1g
+    memswap_limit: 1g
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
 configs:
   garage_toml:
     content: |
@@ -107,3 +187,4 @@ volumes:
   garage-meta:
   garage-data:
   postgres-data:
+  spark-checkpoint:

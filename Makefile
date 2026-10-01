@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix dbt-build dbt-parse dagster clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark dbt-build dbt-parse dagster clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -38,7 +38,10 @@ pre-commit: check_uv
 # Creates .env from .env.example on first run (local-only credentials)
 up:
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example")
-	$(COMPOSE_DEV) up -d --wait
+	$(COMPOSE_DEV) up -d --wait redpanda redpanda-console garage postgres lakekeeper
+	# One-shot: bootstrap Lakekeeper and create the Iceberg warehouse (idempotent).
+	# Not under --wait, which reports any exited container as a failure
+	$(COMPOSE_DEV) up lakekeeper-init
 
 down:
 	$(COMPOSE_DEV) down
@@ -60,6 +63,10 @@ produce: check_uv
 
 quix: check_uv
 	uv run python -m src.processing.quix.app
+
+# Branch A streaming job, in a container of the stack (Lakekeeper hands out garage:3900)
+spark:
+	$(COMPOSE_DEV) --profile spark up -d --build spark
 
 # Branch B Silver/Gold on the local DuckLake (dbt does not read .env itself)
 DBT_DUCKDB = set -a && . ./.env && set +a && cd dbt/duckdb && uv run dbt

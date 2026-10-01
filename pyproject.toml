@@ -25,6 +25,10 @@ quix = [
 ]
 spark = [
     "pyspark==4.1.3",
+]
+# Branch A Silver/Gold (phase 5), apart from the streaming image
+dbt-spark = [
+    "pyspark==4.1.3",
     "dbt-core>=1.12,<1.13",
     "dbt-spark[session]>=1.11,<1.12",
 ]
