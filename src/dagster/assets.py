@@ -5,10 +5,14 @@ Assets contain no business logic: they delegate to dbt and to the processing mod
 - `quix_bronze`: Bronze table written by the Quix sink, observed (current snapshot).
 - dbt models: one asset per Silver and Gold model, dbt tests as asset checks. The
   project and its manifest are found from `src.config`, never an absolute path.
+
+Keys are `bluesky/<layer>/<name>` and groups are the layers: the Dagster catalog is
+shared with velib, each project keeps its own folder.
 """
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from typing import Any
 
 from dagster import (
     AssetExecutionContext,
@@ -20,7 +24,7 @@ from dagster import (
     RetryPolicy,
     observable_source_asset,
 )
-from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
+from dagster_dbt import DagsterDbtTranslator, DbtCliResource, DbtProject, dbt_assets
 
 from src import config
 from src.processing.backlog import (
@@ -41,6 +45,8 @@ dbt_project.prepare_if_dev()
 
 @observable_source_asset(
     name="quix_bronze",
+    key_prefix=[config.DAGSTER_ASSET_PREFIX, "bronze"],
+    group_name="bronze",
     description="DuckLake Bronze table written by the Quix Streams sink (catalog `bronze`).",
 )
 def quix_bronze() -> ObserveResult:
@@ -80,9 +86,29 @@ def _silver_selected(context: AssetExecutionContext) -> bool:
     return any(_is_silver(key) for key in context.selected_asset_keys)
 
 
+class BlueskyDbtTranslator(DagsterDbtTranslator):
+    """dbt models as `bluesky/<layer>/<model>` in the group of their layer (silver, gold).
+
+    The Bronze source keeps the key set in its dbt meta (the `quix_bronze` asset).
+    """
+
+    def get_asset_key(self, dbt_resource_props: Mapping[str, Any]) -> AssetKey:
+        key = super().get_asset_key(dbt_resource_props)
+        if dbt_resource_props["resource_type"] != "model":
+            return key
+        return key.with_prefix(config.DAGSTER_ASSET_PREFIX)
+
+    def get_group_name(self, dbt_resource_props: Mapping[str, Any]) -> str | None:
+        if dbt_resource_props["resource_type"] != "model":
+            return super().get_group_name(dbt_resource_props)
+        # fqn = [project, layer folder, ..., model]
+        return dbt_resource_props["fqn"][1]
+
+
 @dbt_assets(
     manifest=dbt_project.manifest_path,
     project=dbt_project,
+    dagster_dbt_translator=BlueskyDbtTranslator(),
     retry_policy=RetryPolicy(
         max_retries=config.DAGSTER_RETRY_MAX, delay=config.DAGSTER_RETRY_DELAY_SECONDS
     ),

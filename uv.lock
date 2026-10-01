@@ -232,6 +232,7 @@ dagster = [
     { name = "dagster-postgres" },
     { name = "dbt-core" },
     { name = "dbt-duckdb" },
+    { name = "requests" },
     { name = "s3fs" },
 ]
 dev = [
@@ -274,6 +275,7 @@ dagster = [
     { name = "dagster-postgres" },
     { name = "dbt-core", specifier = ">=1.12,<1.13" },
     { name = "dbt-duckdb", specifier = ">=1.11,<1.12" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "s3fs" },
 ]
 dev = [

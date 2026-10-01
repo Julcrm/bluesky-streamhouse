@@ -90,17 +90,13 @@ def _tables(conn: duckdb.DuckDBPyConnection, schema: str) -> list[str]:
     ]
 
 
-def silver_read_snapshot(transform: duckdb.DuckDBPyConnection) -> int | None:
-    """Bronze snapshot every Silver model has read up to, None before the first run.
+def silver_positions(transform: duckdb.DuckDBPyConnection) -> dict[str, int | None]:
+    """Bronze snapshot each Silver model has read up to, None before its first run.
 
     A model's position is its last completed range in the progress table, else (before
-    that table existed) the max `bronze_snapshot_id` of its rows. The lowest position is
-    what the next run starts from if a model was left behind (failed run).
+    that table existed) the max `bronze_snapshot_id` of its rows.
     """
     alias = config.DUCKLAKE_TRANSFORM_ALIAS
-    tables = _tables(transform, SILVER_SCHEMA)
-    if not tables:
-        return None
     progress = {}
     if PROGRESS_TABLE in _tables(transform, PROGRESS_SCHEMA):
         progress = dict(
@@ -109,15 +105,24 @@ def silver_read_snapshot(transform: duckdb.DuckDBPyConnection) -> int | None:
                 f"FROM {alias}.{PROGRESS_SCHEMA}.{PROGRESS_TABLE} WHERE done GROUP BY model"
             ).fetchall()
         )
-    snapshots = [
-        progress.get(table)
+    return {
+        table: progress[table]
         if progress.get(table) is not None
         else transform.execute(
             f"SELECT max(bronze_snapshot_id) FROM {alias}.{SILVER_SCHEMA}.{table}"
         ).fetchone()[0]
-        for table in tables
-    ]
-    if any(snapshot is None for snapshot in snapshots):
+        for table in _tables(transform, SILVER_SCHEMA)
+    }
+
+
+def silver_read_snapshot(transform: duckdb.DuckDBPyConnection) -> int | None:
+    """Bronze snapshot every Silver model has read up to, None before the first run.
+
+    The lowest position is what the next run starts from if a model was left behind
+    (failed run).
+    """
+    snapshots = list(silver_positions(transform).values())
+    if not snapshots or any(snapshot is None for snapshot in snapshots):
         return None
     return min(snapshots)
 

@@ -105,6 +105,9 @@ DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 # --- Dagster, branch B (decision D20) ---
 # Code location name in the dagster-workspace workspace.yaml
 DAGSTER_CODE_LOCATION = "bluesky_duckdb"
+# Every asset key starts with it: one folder per project in the shared Dagster catalog
+# (velib-lakehouse uses `velib`), then one per layer (bronze, silver, gold, maintenance)
+DAGSTER_ASSET_PREFIX = "bluesky"
 # dbt project of branch B, found from this file (no absolute path, unlike velib)
 DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
 # Silver -> Gold every 15 min, same freshness contract as branch A
@@ -118,6 +121,45 @@ DAGSTER_RETRY_DELAY_SECONDS = 30
 # passes of 500 000 rows (silver_max_rows_per_run in dbt_project.yml); the next run
 # carries on from where this one stopped
 CATCHUP_MAX_PASSES = 100
+
+# --- Maintenance, branch B (decisions D14, D21) ---
+# Retention by event day (tables are split by day: a DELETE drops whole files)
+BRONZE_RETENTION_DAYS = 7
+SILVER_RETENTION_DAYS = 7
+GOLD_RETENTION_DAYS = 30
+# Read positions in meta.silver_progress older than this are deleted (the last done
+# position of each model is always kept)
+SILVER_PROGRESS_RETENTION_DAYS = 7
+# Nightly, outside the 07:00-19:00 window of the branches (D10)
+MAINTENANCE_CRON = "0 2 * * *"
+# DuckLake options persisted by set_option, applied by CHECKPOINT (D21): 24 h of time
+# travel, files kept 1 h after they stop being used (a running scan may still read them)
+DUCKLAKE_EXPIRE_OLDER_THAN = "1 day"
+DUCKLAKE_DELETE_OLDER_THAN = "1 hour"
+DUCKLAKE_TARGET_FILE_SIZE = "512MB"
+# Quix commits every 5 s: a Bronze CHECKPOINT can lose the race and is retried
+CHECKPOINT_RETRIES = 3
+CHECKPOINT_RETRY_DELAY_SECONDS = 30
+# Same budget as the dbt profile, inside the 1.5 GB code server
+MAINTENANCE_DUCKDB_MEMORY_LIMIT = "1GB"
+MAINTENANCE_DUCKDB_THREADS = 2
+MAINTENANCE_DUCKDB_TEMP_DIRECTORY = "/tmp/duckdb_maintenance"
+# A Silver/Gold run in progress at 02:00 is waited for, up to this long
+MAINTENANCE_WAIT_FOR_RUN_SECONDS = 30 * 60
+# Guard (D16, D21): pending snapshots older than the time travel window would be
+# expired before Silver or Gold read them, so the maintenance stops instead
+READ_POSITION_MAX_AGE_HOURS = 24
+# Alerts (D14, D21): whole bucket (orphans and pending deletions included), and the
+# Postgres database holding both catalogs
+BUCKET_ALERT_BYTES = 80 * 10**9
+CATALOG_ALERT_BYTES = 2 * 10**9
+# Dagster runs of this code location only: the instance is shared with velib (D20)
+DAGSTER_RUN_RETENTION_DAYS = 30
+
+# --- Alerts (Resend, as velib) ---
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
+ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

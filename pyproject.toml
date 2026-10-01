@@ -34,6 +34,7 @@ dagster = [
     "dagster-postgres",
     "dbt-core>=1.12,<1.13",
     "dbt-duckdb>=1.11,<1.12",
+    "requests>=2.32",
     "s3fs",
 ]
 benchmark = [
