@@ -4,7 +4,10 @@
 -- var('gold_max_hours_per_run'), and at that position every hour they hold is final.
 -- Hours with no row on one side count as 0 (an engagement hour may hold only deletes).
 -- Checked on the last hours only (var gold_check_window): active accounts need a full
--- count(DISTINCT) per hour, too costly on a whole day every 15 min
+-- count(DISTINCT) per hour, too costly on a whole day every 15 min. The nightly job
+-- reruns it over a day (D25)
+
+{{ config(meta={'dagster': {'ref': {'name': 'gold_activity_minute'}}}) }}
 
 {%- set gold_models = ['gold_activity_minute', 'gold_engagement_hour', 'gold_active_users_hour'] %}
 {%- set read_at = {} %}

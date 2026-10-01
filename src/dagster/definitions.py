@@ -18,7 +18,7 @@ from dagster_dbt import DbtCliResource
 
 from src import config
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
-from src.dagster.jobs import maintenance_job, silver_gold_job
+from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.runs import active_location_runs, blocks_schedule
 from src.dagster.sensors import failure_alert_sensor
@@ -28,6 +28,8 @@ __all__ = [
     "defs",
     "maintenance_job",
     "maintenance_schedule",
+    "nightly_checks_job",
+    "nightly_checks_schedule",
     "silver_gold_job",
     "silver_gold_schedule",
 ]
@@ -68,10 +70,29 @@ def maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | Ski
     return RunRequest()
 
 
+@schedule(
+    job=nightly_checks_job,
+    cron_schedule=config.NIGHTLY_CHECKS_CRON,
+    execution_timezone=config.DAGSTER_TIMEZONE,
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Every night at 03:00 (Europe/Paris), after the maintenance: every dbt test over a
+    day (D25). The run itself waits for the other runs of the location."""
+    previous = [
+        run
+        for run in active_location_runs(context.instance, nightly_checks_job.name)
+        if run.job_name == nightly_checks_job.name
+    ]
+    if previous:
+        return SkipReason(f"Nightly checks run {previous[0].run_id} still in progress")
+    return RunRequest()
+
+
 defs = Definitions(
     assets=[quix_bronze, bluesky_dbt_models, *maintenance_assets],
-    jobs=[silver_gold_job, maintenance_job],
-    schedules=[silver_gold_schedule, maintenance_schedule],
+    jobs=[silver_gold_job, maintenance_job, nightly_checks_job],
+    schedules=[silver_gold_schedule, maintenance_schedule, nightly_checks_schedule],
     sensors=[failure_alert_sensor],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

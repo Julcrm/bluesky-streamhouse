@@ -10,7 +10,7 @@ import requests
 from dagster import DefaultSensorStatus, RunFailureSensorContext, run_failure_sensor
 
 from src import config
-from src.dagster.jobs import maintenance_job, silver_gold_job
+from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 
 
 def send_failure_email(run_id: str, job_name: str, error: str) -> bool:
@@ -38,11 +38,11 @@ def send_failure_email(run_id: str, job_name: str, error: str) -> bool:
 
 
 @run_failure_sensor(
-    monitored_jobs=[silver_gold_job, maintenance_job],
+    monitored_jobs=[silver_gold_job, maintenance_job, nightly_checks_job],
     default_status=DefaultSensorStatus.RUNNING,
 )
 def failure_alert_sensor(context: RunFailureSensorContext) -> None:
-    """Email on any failed run of the Silver/Gold or maintenance job."""
+    """Email on any failed run of the Silver/Gold, maintenance or nightly checks job."""
     error = context.failure_event.message if context.failure_event else "Unknown error"
     if not send_failure_email(context.dagster_run.run_id, context.dagster_run.job_name, error):
         context.log.warning("RESEND_API_KEY or ALERT_EMAIL missing: failure alert not sent")

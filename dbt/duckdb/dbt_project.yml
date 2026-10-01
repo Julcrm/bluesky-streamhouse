@@ -21,10 +21,14 @@ vars:
   gold_max_hours_per_run: 6
   # Hashtags kept per hour in gold_hashtags_hour (D19)
   gold_top_hashtags: 50
+  # Test windows (decision D25). Every 15 min, tests check what the last runs wrote:
+  # Silver rows *processed* (written to Bronze) in the last 2 hours, so late rows of a
+  # catch-up are covered whatever their event_time. Over a whole day every 15 min, tests
+  # took 211 s of a 226 s build. The nightly job reruns every test with 1-day windows
+  # (src.config.NIGHTLY_TEST_VARS), the same tests, not a copy
+  test_window: "INTERVAL 2 HOUR"
   # Hours recomputed from Silver by assert_gold_matches_silver
   gold_check_window: "INTERVAL 3 HOUR"
-  # Uniqueness tests only scan recent rows: a full 7-day scan every 15 min is too costly
-  recent_rows_window: "INTERVAL 1 DAY"
 
 models:
   bluesky_duckdb:
