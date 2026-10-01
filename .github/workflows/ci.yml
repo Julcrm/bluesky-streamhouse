@@ -48,6 +48,11 @@ jobs:
       - name: Validate Dagster definitions (branch B)
         run: uv run dagster definitions validate -m src.dagster.definitions
 
+      - name: Validate Dagster definitions (branch A)
+        run: uv run dagster definitions validate -m src.dagster.spark_definitions
+        env:
+          DAGSTER_CODE_LOCATION: bluesky_spark
+
       - name: Check uv.lock is up to date
         run: uv lock --check
 
