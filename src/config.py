@@ -156,6 +156,15 @@ CATALOG_ALERT_BYTES = 2 * 10**9
 # Dagster runs of this code location only: the instance is shared with velib (D20)
 DAGSTER_RUN_RETENTION_DAYS = 30
 
+# --- Nightly checks (decision D25) ---
+# Every 15 min, dbt tests check the last 2 hours written (dbt var test_window); every
+# night the same tests run alone over a day, after the maintenance
+NIGHTLY_CHECKS_CRON = "0 3 * * *"
+NIGHTLY_CHECKS_TAG = "bluesky/nightly_checks"
+NIGHTLY_TEST_VARS = {"test_window": "INTERVAL 1 DAY", "gold_check_window": "INTERVAL 1 DAY"}
+# Waits for any other run of the location (Silver/Gold, maintenance), up to this long
+NIGHTLY_CHECKS_WAIT_SECONDS = 2 * 60 * 60
+
 # --- Alerts (Resend, as velib) ---
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")

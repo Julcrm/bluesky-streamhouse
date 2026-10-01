@@ -10,6 +10,7 @@ Keys are `bluesky/<layer>/<name>` and groups are the layers: the Dagster catalog
 shared with velib, each project keeps its own folder.
 """
 
+import json
 import subprocess
 from collections.abc import Iterator, Mapping
 from typing import Any
@@ -27,6 +28,7 @@ from dagster import (
 from dagster_dbt import DagsterDbtTranslator, DbtCliResource, DbtProject, dbt_assets
 
 from src import config
+from src.dagster.runs import wait_for_runs
 from src.processing.backlog import (
     Backlog,
     current_backlog,
@@ -121,6 +123,21 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
     and publishes materializations and checks. A pass that moves no read position fails
     the run: looping on it would hide a stalled model (prod, 2026-09-28 to 2026-10-01).
     """
+    if context.run.tags.get(config.NIGHTLY_CHECKS_TAG) == "true":
+        # Nightly checks (D25): the same tests over a day, alone. One dbt at a time in
+        # this container (DuckDB file lock), and no test while the maintenance rewrites
+        wait_for_runs(
+            context.instance, context.log, context.run_id, None, config.NIGHTLY_CHECKS_WAIT_SECONDS
+        )
+        invocation = dbt.cli(
+            ["build", "--vars", json.dumps(config.NIGHTLY_TEST_VARS)], context=context
+        )
+        try:
+            yield from invocation.stream()
+        finally:
+            _stop(invocation.process)
+        return
+
     passes = 0
     if _silver_selected(context):
         silver_cap, gold_cap = silver_max_rows_per_run(), gold_max_hours_per_run()

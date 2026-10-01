@@ -2,6 +2,7 @@
 
 from dagster import AssetSelection, define_asset_job
 
+from src import config
 from src.dagster.assets import bluesky_dbt_models, quix_bronze
 from src.dagster.maintenance import GROUP as MAINTENANCE_GROUP
 
@@ -18,4 +19,12 @@ maintenance_job = define_asset_job(
     "purge of old runs (D14, D21).",
     # One step at a time: each CHECKPOINT gets the whole DuckDB budget of the container
     config={"execution": {"config": {"multiprocess": {"max_concurrent": 1}}}},
+)
+
+nightly_checks_job = define_asset_job(
+    name="bluesky_nightly_checks",
+    # The dbt tests only, no model: rerun over a day instead of 2 hours (D25)
+    selection=AssetSelection.checks_for_assets(bluesky_dbt_models),
+    description="Every dbt test of Silver and Gold over the last day (D25).",
+    tags={config.NIGHTLY_CHECKS_TAG: "true"},
 )

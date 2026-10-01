@@ -24,7 +24,7 @@ from dagster import (
 )
 
 from src import config
-from src.dagster.runs import active_location_runs, in_location
+from src.dagster.runs import in_location, wait_for_runs
 from src.maintenance import ducklake as maintenance
 from src.processing.backlog import GOLD_SCHEMA, gold_positions, silver_positions
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
@@ -42,17 +42,15 @@ FINISHED_RUN_STATUSES = [
 
 def _wait_for_silver_gold(context: AssetExecutionContext) -> None:
     """Wait for a Silver/Gold run in progress (dbt writes the transform catalog), up to
-    MAINTENANCE_WAIT_FOR_RUN_SECONDS. The schedule skips its ticks while this runs."""
-    deadline = time.monotonic() + config.MAINTENANCE_WAIT_FOR_RUN_SECONDS
-    while active := active_location_runs(context.instance, SILVER_GOLD_JOB, context.run_id):
-        if time.monotonic() > deadline:
-            raise Failure(
-                f"Run {active[0].run_id} ({active[0].job_name}) still in progress after "
-                f"{config.MAINTENANCE_WAIT_FOR_RUN_SECONDS // 60} min: maintenance skipped",
-                allow_retries=False,
-            )
-        context.log.info(f"Waiting for run {active[0].run_id} ({active[0].job_name})")
-        time.sleep(30)
+    MAINTENANCE_WAIT_FOR_RUN_SECONDS. The schedule skips its ticks while this runs.
+    Not for the nightly checks: they only read, and they wait for the maintenance."""
+    wait_for_runs(
+        context.instance,
+        context.log,
+        context.run_id,
+        {SILVER_GOLD_JOB, "__ASSET_JOB"},
+        config.MAINTENANCE_WAIT_FOR_RUN_SECONDS,
+    )
 
 
 def _guard(context: AssetExecutionContext, stale: dict[str, str], catalog: str) -> None:
