@@ -235,6 +235,11 @@ dagster = [
     { name = "requests" },
     { name = "s3fs" },
 ]
+dbt-spark = [
+    { name = "dbt-core" },
+    { name = "dbt-spark", extra = ["session"] },
+    { name = "pyspark" },
+]
 dev = [
     { name = "dagster-webserver" },
     { name = "pre-commit" },
@@ -251,8 +256,6 @@ quix = [
     { name = "quixstreams" },
 ]
 spark = [
-    { name = "dbt-core" },
-    { name = "dbt-spark", extra = ["session"] },
     { name = "pyspark" },
 ]
 
@@ -278,6 +281,11 @@ dagster = [
     { name = "requests", specifier = ">=2.32" },
     { name = "s3fs" },
 ]
+dbt-spark = [
+    { name = "dbt-core", specifier = ">=1.12,<1.13" },
+    { name = "dbt-spark", extras = ["session"], specifier = ">=1.11,<1.12" },
+    { name = "pyspark", specifier = "==4.1.3" },
+]
 dev = [
     { name = "dagster-webserver", specifier = ">=1.13,<1.14" },
     { name = "pre-commit" },
@@ -293,11 +301,7 @@ quix = [
     { name = "pyarrow", specifier = ">=20" },
     { name = "quixstreams", specifier = ">=3.26,<4" },
 ]
-spark = [
-    { name = "dbt-core", specifier = ">=1.12,<1.13" },
-    { name = "dbt-spark", extras = ["session"], specifier = ">=1.11,<1.12" },
-    { name = "pyspark", specifier = "==4.1.3" },
-]
+spark = [{ name = "pyspark", specifier = "==4.1.3" }]
 
 [[package]]
 name = "botocore"

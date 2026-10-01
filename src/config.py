@@ -66,8 +66,9 @@ S3_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
 S3_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 BUCKET = os.getenv("BUCKET", "bluesky-streamhouse")
 
-ICEBERG_WAREHOUSE = f"s3a://{BUCKET}/iceberg"
-SPARK_CHECKPOINT_PATH = f"s3a://{BUCKET}/checkpoints/spark"
+# Iceberg tables live under s3://<bucket>/iceberg/ (key prefix of the Lakekeeper
+# warehouse, set at warehouse creation): disjoint from the DuckLake paths below
+ICEBERG_KEY_PREFIX = "iceberg"
 # One DuckLake catalog per writer (decision D15): Quix writes Bronze, dbt writes Silver
 # and Gold. Data paths must not overlap: a catalog's CHECKPOINT deletes every file under
 # its DATA_PATH that it does not track, so a nested path would lose the other's files
@@ -169,6 +170,38 @@ NIGHTLY_CHECKS_WAIT_SECONDS = 2 * 60 * 60
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
+
+# --- Branch A: Spark Structured Streaming -> Iceberg (phase 4) ---
+# Iceberg REST catalog (Lakekeeper, Postgres-backed). It signs the S3 requests of its
+# clients (remote signing): Spark holds no S3 key. Garage has no STS for vended creds
+ICEBERG_CATALOG_URI = os.getenv("ICEBERG_CATALOG_URI", "http://localhost:8181/catalog")
+ICEBERG_WAREHOUSE = os.getenv("ICEBERG_WAREHOUSE", "bluesky")
+# Spark catalog name: tables are lakekeeper.<namespace>.<table>
+SPARK_CATALOG = "lakekeeper"
+ICEBERG_BRONZE_NAMESPACE = "bronze"
+# Streaming state (Kafka offsets, batch ids) on a local volume: a checkpoint needs
+# atomic renames, which S3 and Garage do not offer
+SPARK_CHECKPOINT_DIR = os.getenv("SPARK_CHECKPOINT_DIR", "state/spark-checkpoint/bronze")
+# Same cadence and batch cap as Quix (decisions D13, D10 parity): 5 s, 50 000 messages
+SPARK_TRIGGER_INTERVAL = f"{int(QUIX_COMMIT_INTERVAL_SECONDS)} seconds"
+SPARK_MAX_OFFSETS_PER_TRIGGER = QUIX_COMMIT_EVERY
+# Driver memory (local mode: the driver runs every task). Set before the JVM starts
+SPARK_DRIVER_MEMORY = os.getenv("SPARK_DRIVER_MEMORY", "512m")
+# JVM flags of the driver (memory outside the heap: metaspace, JIT code cache, threads)
+SPARK_DRIVER_JAVA_OPTIONS = os.getenv("SPARK_DRIVER_JAVA_OPTIONS", "")
+# Shuffle partitions = cores of the node, not Spark's default 200 (tuning checklist)
+SPARK_SHUFFLE_PARTITIONS = int(os.getenv("SPARK_SHUFFLE_PARTITIONS", "4"))
+# Jars: the image sets SPARK_JARS_DIR (resolved at build); a local run resolves packages
+# 1.12.0 (2026-09-30) breaks remote-signed ranged reads (403 Invalid signature on every
+# GET not starting at byte 0, i.e. Parquet footers and columns); 1.11.0 works (tested
+# 2026-10-01 against Lakekeeper 0.13.6 and Garage 2.4.1)
+ICEBERG_VERSION = "1.11.0"
+SPARK_VERSION = "4.1.3"
+SPARK_PACKAGES = (
+    f"org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:{ICEBERG_VERSION}",
+    f"org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_VERSION}",
+    f"org.apache.spark:spark-sql-kafka-0-10_2.13:{SPARK_VERSION}",
+)
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10
