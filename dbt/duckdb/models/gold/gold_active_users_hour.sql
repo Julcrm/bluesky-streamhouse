@@ -10,25 +10,25 @@
 -- =============================================================================
 
 {%- set silver_models = ['silver_posts', 'silver_likes', 'silver_reposts', 'silver_follows'] %}
-{%- set last_read, current = gold_snapshot_range() %}
-{%- set hours = touched_hours(silver_models, last_read, current) %}
+{%- set last_read, read_up_to = gold_snapshot_range(silver_models) %}
+{%- set hours = touched_hours(silver_models, last_read, read_up_to) %}
 
 WITH actions AS (
     SELECT 'app.bsky.feed.post' AS collection, event_time, did
-    FROM {{ silver_for_hours('silver_posts', hours, current) }}
+    FROM {{ silver_for_hours('silver_posts', hours, read_up_to) }}
     WHERE operation = 'create'
 
     UNION ALL
     SELECT 'app.bsky.feed.like', event_time, did
-    FROM {{ silver_for_hours('silver_likes', hours, current) }}
+    FROM {{ silver_for_hours('silver_likes', hours, read_up_to) }}
 
     UNION ALL
     SELECT 'app.bsky.feed.repost', event_time, did
-    FROM {{ silver_for_hours('silver_reposts', hours, current) }}
+    FROM {{ silver_for_hours('silver_reposts', hours, read_up_to) }}
 
     UNION ALL
     SELECT 'app.bsky.graph.follow', event_time, did
-    FROM {{ silver_for_hours('silver_follows', hours, current) }}
+    FROM {{ silver_for_hours('silver_follows', hours, read_up_to) }}
 ),
 
 per_hour AS (
@@ -36,7 +36,7 @@ per_hour AS (
         date_trunc('hour', event_time)          AS hour,
         coalesce(collection, 'all')             AS collection,
         count(DISTINCT did)                     AS active_accounts,
-        {{ current }}::BIGINT                   AS silver_snapshot_id
+        {{ read_up_to }}::BIGINT                AS silver_snapshot_id
     FROM actions
     GROUP BY GROUPING SETS ((date_trunc('hour', event_time), collection), (date_trunc('hour', event_time)))
 )

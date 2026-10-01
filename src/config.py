@@ -114,9 +114,10 @@ DAGSTER_TIMEZONE = "Europe/Paris"
 # (it invalidates the DuckDB instance; a fresh run starts clean)
 DAGSTER_RETRY_MAX = 2
 DAGSTER_RETRY_DELAY_SECONDS = 30
-# Upper bound on Silver catch-up passes in one run: 07:00 catch-up is ~19 M Bronze
-# rows, ~40 passes of 500 000 rows (silver_max_rows_per_run in dbt_project.yml)
-SILVER_MAX_CATCHUP_PASSES = 100
+# Upper bound on catch-up passes in one run: 07:00 catch-up is ~19 M Bronze rows, ~40
+# passes of 500 000 rows (silver_max_rows_per_run in dbt_project.yml); the next run
+# carries on from where this one stopped
+CATCHUP_MAX_PASSES = 100
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

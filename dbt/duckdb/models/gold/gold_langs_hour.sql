@@ -7,12 +7,13 @@
 -- Output      : transform.gold.gold_langs_hour, split by day(hour)
 -- =============================================================================
 
-{%- set last_read, current = gold_snapshot_range() %}
-{%- set hours = touched_hours(['silver_posts'], last_read, current) %}
+{%- set silver_models = ['silver_posts'] %}
+{%- set last_read, read_up_to = gold_snapshot_range(silver_models) %}
+{%- set hours = touched_hours(silver_models, last_read, read_up_to) %}
 
 WITH posts AS (
     SELECT event_time, seq, langs
-    FROM {{ silver_for_hours('silver_posts', hours, current) }}
+    FROM {{ silver_for_hours('silver_posts', hours, read_up_to) }}
     WHERE operation = 'create'
 ),
 
@@ -29,7 +30,7 @@ per_hour AS (
         hour,
         lang,
         count(*)                AS posts,
-        {{ current }}::BIGINT   AS silver_snapshot_id
+        {{ read_up_to }}::BIGINT   AS silver_snapshot_id
     FROM post_langs
     GROUP BY ALL
 )

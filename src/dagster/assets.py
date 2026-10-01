@@ -14,6 +14,7 @@ from dagster import (
     AssetExecutionContext,
     AssetKey,
     DataVersion,
+    Failure,
     ObserveResult,
     Output,
     RetryPolicy,
@@ -22,7 +23,11 @@ from dagster import (
 from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
 
 from src import config
-from src.processing.silver_backlog import silver_backlog_rows, silver_max_rows_per_run
+from src.processing.backlog import (
+    current_backlog,
+    gold_max_hours_per_run,
+    silver_max_rows_per_run,
+)
 from src.resources.ducklake import connect
 
 dbt_project = DbtProject(
@@ -84,25 +89,41 @@ def _silver_selected(context: AssetExecutionContext) -> bool:
 def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> Iterator:
     """Silver then Gold, with dbt tests as asset checks.
 
-    Catch-up (option (a), decision D20): while the Silver backlog exceeds one run's cap,
-    Silver runs again in silent passes; the final `dbt build` then reads the rest, builds
-    Gold once over every touched hour and publishes materializations and checks.
+    Catch-up (option (a), decision D20): while Silver or Gold is behind by more than one
+    run's cap, dbt runs again in silent passes; the final `dbt build` then reads the rest
+    and publishes materializations and checks. A pass that moves no read position fails
+    the run: looping on it would hide a stalled model (prod, 2026-09-28 to 2026-10-01).
     """
     passes = 0
     if _silver_selected(context):
-        cap = silver_max_rows_per_run()
-        backlog = silver_backlog_rows()
-        context.log.info(f"Silver backlog: {backlog} Bronze rows (cap {cap} per run)")
-        while backlog > cap and passes < config.SILVER_MAX_CATCHUP_PASSES:
+        silver_cap, gold_cap = silver_max_rows_per_run(), gold_max_hours_per_run()
+        backlog = current_backlog(dbt_project.manifest_path)
+        context.log.info(
+            f"Backlog: {backlog.silver_rows} Bronze rows for Silver (cap {silver_cap} per run), "
+            f"{backlog.gold_hours} hours for Gold (cap {gold_cap})"
+        )
+        while (
+            backlog.silver_rows > silver_cap or backlog.gold_hours > gold_cap
+        ) and passes < config.CATCHUP_MAX_PASSES:
             # Not streamed: Dagster accepts a single materialization per asset and run
-            dbt.cli(["run", "--select", "path:models/silver"]).wait()
+            dbt.cli(["run"]).wait()
             passes += 1
-            backlog = silver_backlog_rows()
-            context.log.info(f"Silver catch-up pass {passes}: {backlog} Bronze rows left")
+            previous, backlog = backlog, current_backlog(dbt_project.manifest_path)
+            context.log.info(
+                f"Catch-up pass {passes}: {backlog.silver_rows} Bronze rows, "
+                f"{backlog.gold_hours} Gold hours left"
+            )
+            if not backlog.progressed_from(previous):
+                # Deterministic: a retry would loop the same way
+                raise Failure(
+                    f"Catch-up pass {passes} moved no read position ({previous} -> {backlog}): "
+                    "a model is not moving its read position",
+                    allow_retries=False,
+                )
     invocation = dbt.cli(["build"], context=context)
     try:
         for event in invocation.stream():
-            # Benchmark metadata: how many extra Silver passes this run needed
+            # Benchmark metadata: how many extra passes this run needed
             if isinstance(event, Output) and _is_silver(
                 context.asset_key_for_output(event.output_name)
             ):

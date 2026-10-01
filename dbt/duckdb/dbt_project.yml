@@ -8,10 +8,17 @@ model-paths: ["models"]
 macro-paths: ["macros"]
 test-paths: ["tests"]
 
+# Silver read positions live outside the models' rows (macros/bronze_changes.sql)
+on-run-start:
+  - "{{ create_silver_progress() }}"
+
 vars:
   # Bronze rows read per Silver run (all collections). ~300k posts in one batch overflowed
   # 1 GB; 500k Bronze rows is ~130k posts on a post-heavy mix (~55k on the prod mix)
   silver_max_rows_per_run: 500000
+  # Hours one Gold model rebuilds per run: an exact count(DISTINCT) over 40+ hours
+  # (Gold stuck for a day and a half) overflowed 1 GB in prod on 2026-10-01
+  gold_max_hours_per_run: 6
   # Hashtags kept per hour in gold_hashtags_hour (D19)
   gold_top_hashtags: 50
   # Hours recomputed from Silver by assert_gold_matches_silver
@@ -28,6 +35,8 @@ models:
       +materialized: incremental
       +incremental_strategy: append
       +partitioned_by: ["year(event_time)", "month(event_time)", "day(event_time)"]
+      # Same transaction as the insert: the read position moves even with no new row
+      +post-hook: "{{ mark_silver_progress() }}"
     gold:
       +schema: gold
       # Rebuild the hours touched by new Silver rows (D19): every row of a rebuilt hour
