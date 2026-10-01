@@ -91,6 +91,9 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=us-east-1
       - BUCKET=${BUCKET:-bluesky-streamhouse}
+      # Failure alerts by email (Resend, as velib); none are sent while unset
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - ALERT_EMAIL=${ALERT_EMAIL}
     # A run in progress is interrupted on redeploy; the next schedule tick resumes
     # from the last Bronze snapshot Silver read (incremental by snapshot, D16)
     stop_grace_period: 30s

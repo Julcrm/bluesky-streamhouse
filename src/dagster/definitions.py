@@ -7,48 +7,30 @@ against its own limit: the cost of branch B's transformations stays attributable
 """
 
 from dagster import (
-    AssetSelection,
-    DagsterRun,
-    DagsterRunStatus,
     DefaultScheduleStatus,
     Definitions,
     RunRequest,
-    RunsFilter,
     ScheduleEvaluationContext,
     SkipReason,
-    define_asset_job,
     schedule,
 )
 from dagster_dbt import DbtCliResource
 
 from src import config
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
+from src.dagster.jobs import maintenance_job, silver_gold_job
+from src.dagster.maintenance import maintenance_assets
+from src.dagster.runs import active_location_runs, blocks_schedule
+from src.dagster.sensors import failure_alert_sensor
 
-# Statuses of a run that is not finished yet
-ACTIVE_RUN_STATUSES = [
-    DagsterRunStatus.QUEUED,
-    DagsterRunStatus.NOT_STARTED,
-    DagsterRunStatus.STARTING,
-    DagsterRunStatus.STARTED,
-    DagsterRunStatus.CANCELING,
+__all__ = [
+    "blocks_schedule",
+    "defs",
+    "maintenance_job",
+    "maintenance_schedule",
+    "silver_gold_job",
+    "silver_gold_schedule",
 ]
-
-silver_gold_job = define_asset_job(
-    name="bluesky_silver_gold",
-    selection=AssetSelection.keys(quix_bronze.key) | AssetSelection.assets(bluesky_dbt_models),
-    description="Observe Bronze, then Silver (with catch-up passes) and Gold, dbt tests as checks.",
-)
-
-
-def blocks_schedule(run: DagsterRun, job_name: str = "bluesky_silver_gold") -> bool:
-    """True for an unfinished run of this code location: the scheduled job, or a manual
-    materialization from the UI (`__ASSET_JOB`), which writes the same tables."""
-    origin = run.remote_job_origin
-    if origin is None:  # run created outside a code location (tests, execute_in_process)
-        return run.job_name == job_name
-    return origin.repository_origin.code_location_origin.location_name == (
-        config.DAGSTER_CODE_LOCATION
-    )
 
 
 @schedule(
@@ -60,19 +42,36 @@ def blocks_schedule(run: DagsterRun, job_name: str = "bluesky_silver_gold") -> b
 def silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     """Every 15 min, one run at a time: a catch-up run can outlast the interval, and a
     second dbt would wait on the first one's DuckDB file lock and fail."""
-    active = [
-        record.dagster_run
-        for record in context.instance.get_run_records(RunsFilter(statuses=ACTIVE_RUN_STATUSES))
-        if blocks_schedule(record.dagster_run, silver_gold_job.name)
-    ]
+    # Any run of this code location blocks it, maintenance included (same catalogs)
+    active = active_location_runs(context.instance, silver_gold_job.name)
     if active:
         return SkipReason(f"Run {active[0].run_id} ({active[0].job_name}) still in progress")
     return RunRequest()
 
 
+@schedule(
+    job=maintenance_job,
+    cron_schedule=config.MAINTENANCE_CRON,
+    execution_timezone=config.DAGSTER_TIMEZONE,
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Every night at 02:00 (Europe/Paris), outside the 07:00-19:00 window (D10). A
+    Silver/Gold run in progress is waited for by the maintenance itself."""
+    previous = [
+        run
+        for run in active_location_runs(context.instance, maintenance_job.name)
+        if run.job_name == maintenance_job.name
+    ]
+    if previous:
+        return SkipReason(f"Maintenance run {previous[0].run_id} still in progress")
+    return RunRequest()
+
+
 defs = Definitions(
-    assets=[quix_bronze, bluesky_dbt_models],
-    jobs=[silver_gold_job],
-    schedules=[silver_gold_schedule],
+    assets=[quix_bronze, bluesky_dbt_models, *maintenance_assets],
+    jobs=[silver_gold_job, maintenance_job],
+    schedules=[silver_gold_schedule, maintenance_schedule],
+    sensors=[failure_alert_sensor],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )
