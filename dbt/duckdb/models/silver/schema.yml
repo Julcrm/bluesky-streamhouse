@@ -1,7 +1,8 @@
 version: 2
 
-# Uniqueness tests only scan the last day (var recent_rows_window): Silver keeps 7 days
-# and the tests run every 15 min. Duplicates can only come from recent Bronze replays.
+# Scans of whole columns (unique, accepted_values) only check the rows processed in the
+# last var('test_window') (D25): what the last runs wrote, late catch-up rows included.
+# The nightly job reruns them over a day. not_null needs no window (column statistics).
 
 models:
   - name: silver_posts
@@ -13,7 +14,7 @@ models:
           - not_null
           - unique:
               config:
-                where: "event_time >= now() - {{ var('recent_rows_window') }}"
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: did
         description: "Author account"
         tests: [not_null]
@@ -23,6 +24,8 @@ models:
           - accepted_values:
               arguments:
                 values: ["create", "update"]
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: event_time
         description: "Jetstream reception time (UTC): the reference time of every metric"
         tests: [not_null]
@@ -44,7 +47,7 @@ models:
           - not_null
           - unique:
               config:
-                where: "event_time >= now() - {{ var('recent_rows_window') }}"
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: did
         tests: [not_null]
       - name: event_time
@@ -69,7 +72,7 @@ models:
           - not_null
           - unique:
               config:
-                where: "event_time >= now() - {{ var('recent_rows_window') }}"
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: did
         tests: [not_null]
       - name: event_time
@@ -92,7 +95,7 @@ models:
           - not_null
           - unique:
               config:
-                where: "event_time >= now() - {{ var('recent_rows_window') }}"
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: did
         description: "Follower"
         tests: [not_null]
@@ -116,7 +119,7 @@ models:
           - not_null
           - unique:
               config:
-                where: "event_time >= now() - {{ var('recent_rows_window') }}"
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: did
         tests: [not_null]
       - name: collection
@@ -128,6 +131,8 @@ models:
                   - app.bsky.feed.like
                   - app.bsky.feed.repost
                   - app.bsky.graph.follow
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
       - name: rkey
         tests: [not_null]
       - name: event_time

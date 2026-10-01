@@ -5,7 +5,10 @@ Used by the Silver/Gold schedule (one run at a time) and by the maintenance, whi
 not write the transform catalog while dbt does, nor purge another project's runs.
 """
 
-from dagster import DagsterInstance, DagsterRun, DagsterRunStatus, RunsFilter
+import time
+from collections.abc import Collection
+
+from dagster import DagsterInstance, DagsterRun, DagsterRunStatus, Failure, RunsFilter
 
 from src import config
 
@@ -45,3 +48,33 @@ def active_location_runs(
         if record.dagster_run.run_id != exclude_run_id
         and blocks_schedule(record.dagster_run, job_name)
     ]
+
+
+def wait_for_runs(
+    instance: DagsterInstance,
+    log,
+    own_run_id: str,
+    job_names: Collection[str] | None,
+    timeout_seconds: int,
+    poll_seconds: int = 30,
+) -> None:
+    """Wait until no other unfinished run of this location belongs to `job_names` (any
+    job when None), or fail after `timeout_seconds` without retry.
+
+    Each job waits only for the runs it conflicts with: two jobs waiting for each other
+    would both time out.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while active := [
+        run
+        for run in active_location_runs(instance, "", own_run_id)
+        if job_names is None or run.job_name in job_names
+    ]:
+        if time.monotonic() > deadline:
+            raise Failure(
+                f"Run {active[0].run_id} ({active[0].job_name}) still in progress after "
+                f"{timeout_seconds // 60} min",
+                allow_retries=False,
+            )
+        log.info(f"Waiting for run {active[0].run_id} ({active[0].job_name})")
+        time.sleep(poll_seconds)
