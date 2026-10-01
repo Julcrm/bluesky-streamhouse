@@ -67,6 +67,15 @@ def test_rows_after_counts_inserts_since_snapshot(bronze) -> None:
     assert bronze_rows_after(bronze, first) == 25
 
 
+def test_rows_after_stops_at_limit(bronze) -> None:
+    """The catch-up only asks whether the backlog exceeds one run."""
+    first = _insert(bronze, 30)
+    _insert(bronze, 20)
+    _insert(bronze, 5)
+    assert bronze_rows_after(bronze, first, limit=11) == 11
+    assert bronze_rows_after(bronze, first, limit=100) == 25
+
+
 def test_rows_after_whole_table_before_first_silver_run(bronze) -> None:
     """Without a Silver snapshot, every Bronze row is pending."""
     _insert(bronze, 30)

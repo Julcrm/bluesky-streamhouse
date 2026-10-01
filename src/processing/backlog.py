@@ -122,9 +122,15 @@ def silver_read_snapshot(transform: duckdb.DuckDBPyConnection) -> int | None:
     return min(snapshots)
 
 
-def bronze_rows_after(bronze: duckdb.DuckDBPyConnection, snapshot: int | None) -> int:
+def bronze_rows_after(
+    bronze: duckdb.DuckDBPyConnection, snapshot: int | None, limit: int | None = None
+) -> int:
     """Bronze rows inserted after `snapshot` (all of them, from the oldest kept snapshot,
-    when Silver has never run)."""
+    when Silver has never run), counted up to `limit` at most.
+
+    The catch-up only needs to know whether the backlog exceeds one run: counting 82 M
+    rows took ~65 s before every pass of the 2026-10-01 catch-up, the limit stops early.
+    """
     alias = config.DUCKLAKE_BRONZE_ALIAS
     current = bronze.execute(f"SELECT id FROM ducklake_current_snapshot('{alias}')").fetchone()[0]
     if snapshot is None:
@@ -136,9 +142,10 @@ def bronze_rows_after(bronze: duckdb.DuckDBPyConnection, snapshot: int | None) -
         )
     if snapshot >= current:
         return 0
+    limit_clause = "" if limit is None else f" LIMIT {int(limit)}"
     return bronze.execute(
-        f"SELECT count(*) FROM ducklake_table_changes('{alias}', 'main', '{BRONZE_TABLE}', ?, ?) "
-        "WHERE change_type = 'insert'",
+        "SELECT count(*) FROM (SELECT 1 FROM "
+        f"ducklake_table_insertions('{alias}', 'main', '{BRONZE_TABLE}', ?, ?){limit_clause})",
         [snapshot + 1, current],
     ).fetchone()[0]
 
@@ -192,10 +199,12 @@ def gold_hours_behind(
 
 def current_backlog(
     manifest_path: Path,
+    silver_limit: int | None = None,
     bronze_settings: DuckLakeSettings | None = None,
     transform: DuckLakeSettings | None = None,
 ) -> Backlog:
-    """Silver and Gold backlog. Both catalogs are attached read-only."""
+    """Silver and Gold backlog, Silver rows counted up to `silver_limit`. Both catalogs
+    are attached read-only."""
     bronze_conn = connect(bronze_settings or DuckLakeSettings(), read_only=True)
     try:
         transform_conn = connect(transform or transform_settings(), read_only=True)
@@ -215,7 +224,7 @@ def current_backlog(
             transform_conn.close()
     try:
         return Backlog(
-            bronze_rows_after(bronze_conn, snapshot),
+            bronze_rows_after(bronze_conn, snapshot, silver_limit),
             gold_hours,
             (snapshot, *positions.values()),
         )

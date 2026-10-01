@@ -24,6 +24,7 @@ from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
 
 from src import config
 from src.processing.backlog import (
+    Backlog,
     current_backlog,
     gold_max_hours_per_run,
     silver_max_rows_per_run,
@@ -97,9 +98,22 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
     passes = 0
     if _silver_selected(context):
         silver_cap, gold_cap = silver_max_rows_per_run(), gold_max_hours_per_run()
-        backlog = current_backlog(dbt_project.manifest_path)
+
+        def measure() -> Backlog:
+            # Counting past the cap would not change the decision (and took ~65 s on 82 M
+            # rows); progress is checked on read positions anyway
+            return current_backlog(dbt_project.manifest_path, silver_limit=silver_cap + 1)
+
+        def silver_left(backlog: Backlog) -> str:
+            return (
+                f"over {silver_cap}"
+                if backlog.silver_rows > silver_cap
+                else str(backlog.silver_rows)
+            )
+
+        backlog = measure()
         context.log.info(
-            f"Backlog: {backlog.silver_rows} Bronze rows for Silver (cap {silver_cap} per run), "
+            f"Backlog: {silver_left(backlog)} Bronze rows for Silver (cap {silver_cap} per run), "
             f"{backlog.gold_hours} hours for Gold (cap {gold_cap})"
         )
         while (
@@ -108,9 +122,9 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
             # Not streamed: Dagster accepts a single materialization per asset and run
             dbt.cli(["run"]).wait()
             passes += 1
-            previous, backlog = backlog, current_backlog(dbt_project.manifest_path)
+            previous, backlog = backlog, measure()
             context.log.info(
-                f"Catch-up pass {passes}: {backlog.silver_rows} Bronze rows, "
+                f"Catch-up pass {passes}: {silver_left(backlog)} Bronze rows, "
                 f"{backlog.gold_hours} Gold hours left"
             )
             if not backlog.progressed_from(previous):
