@@ -30,11 +30,8 @@ spark = [
     # Benchmark calendar of the alternation (src/alternation, D28)
     "psycopg2-binary>=2.9",
 ]
-# Branch A Silver/Gold (phase 5), apart from the streaming image
+# Branch A Silver/Gold (phase 5): code server image only, not the streaming one
 dbt-spark = [
-    "pyspark==4.1.3",
-    # Benchmark calendar of the alternation (src/alternation, D28)
-    "psycopg2-binary>=2.9",
     "dbt-core>=1.12,<1.13",
     "dbt-spark[session]>=1.11,<1.12",
 ]

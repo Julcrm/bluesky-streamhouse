@@ -200,6 +200,31 @@ services:
       lakekeeper-init:
         condition: service_completed_successfully
 
+  # Branch A Silver/Gold with dbt-spark (make dbt-spark-build), image of the bluesky_spark
+  # code location, the project mounted from the working copy. The dbt Spark session
+  # runs here, in the stack's network (Lakekeeper hands out garage:3900)
+  dbt-spark:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    profiles: ["spark"]
+    working_dir: /tmp
+    entrypoint: ["sh", "-c"]
+    command: ["SPARK_JARS=$$(ls $$SPARK_JARS_DIR/*.jar | paste -sd, -) exec /app/.venv/bin/dbt build --project-dir /app/dbt/spark --profiles-dir /app/dbt/spark"]
+    environment:
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - ./dbt/spark:/app/dbt/spark
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+
 configs:
   garage_toml:
     content: |

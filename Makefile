@@ -72,6 +72,11 @@ spark:
 iceberg-maintenance:
 	$(COMPOSE_DEV) --profile spark run --rm --build iceberg-maintenance
 
+# Branch A Silver/Gold with dbt-spark, in the stack's network (extra dbt args: ARGS=...)
+dbt-spark-build:
+	$(COMPOSE_DEV) --profile spark run --rm --build dbt-spark \
+		"SPARK_JARS=\$$(ls \$$SPARK_JARS_DIR/*.jar | paste -sd, -) exec /app/.venv/bin/dbt build --project-dir /app/dbt/spark --profiles-dir /app/dbt/spark $(ARGS)"
+
 # Branch B Silver/Gold on the local DuckLake (dbt does not read .env itself)
 DBT_DUCKDB = set -a && . ./.env && set +a && cd dbt/duckdb && uv run dbt
 

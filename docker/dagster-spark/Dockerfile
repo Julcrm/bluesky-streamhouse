@@ -27,7 +27,7 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --group dagster --group spark
+RUN uv sync --frozen --no-dev --group dagster --group spark --group dbt-spark
 
 COPY src/config.py ./src/config.py
 COPY src/__init__.py ./src/__init__.py
