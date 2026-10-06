@@ -7,6 +7,7 @@ import duckdb
 import pytest
 from quixstreams.sinks import SinkBackpressureError, SinkBatch
 
+from src import config
 from src.processing.bronze import BRONZE_COLUMN_NAMES, parse_bronze_event
 from src.processing.quix.app import (
     BRONZE_ARROW_SCHEMA,
@@ -67,8 +68,34 @@ class _FakeConnection:
         pass
 
 
-def _sink_with(conn: _FakeConnection, interval: float) -> DuckLakeBronzeSink:
-    sink = DuckLakeBronzeSink(DuckLakeSettings(), inlined_flush_interval=interval)
+class _FakeLock:
+    """Bronze write lock that is free, or held by the maintenance if `held`."""
+
+    def __init__(self, held: bool = False) -> None:
+        self.held = held
+        self.holds = 0
+
+    def try_acquire(self) -> bool:
+        if self.held:
+            return False
+        self.holds += 1
+        return True
+
+    def release(self) -> None:
+        self.holds -= 1
+
+    def close(self) -> None:
+        pass
+
+
+def _sink_with(
+    conn: _FakeConnection, interval: float, lock: _FakeLock | None = None
+) -> DuckLakeBronzeSink:
+    sink = DuckLakeBronzeSink(
+        DuckLakeSettings(),
+        inlined_flush_interval=interval,
+        lock=lock or _FakeLock(),  # type: ignore[arg-type]
+    )
     sink._conn = conn  # type: ignore[assignment]
     return sink
 
@@ -131,6 +158,52 @@ def test_insert_on_invalidated_instance_replays_the_checkpoint() -> None:
     with pytest.raises(SinkBackpressureError):
         sink._insert([_batch(0, [1, 2])])
     assert sink._conn is None
+
+
+class _RecordingInsertConnection(_FakeConnection):
+    """Accepts the INSERT and its Arrow registration."""
+
+    def register(self, name: str, table: object) -> None:
+        pass
+
+    def unregister(self, name: str) -> None:
+        pass
+
+
+def test_insert_pauses_while_the_maintenance_holds_bronze() -> None:
+    """Maintenance running: no INSERT, backpressure for the lock's retry delay."""
+    conn = _RecordingInsertConnection()
+    sink = _sink_with(conn, interval=3600, lock=_FakeLock(held=True))
+    with pytest.raises(SinkBackpressureError) as raised:
+        sink._insert([_batch(0, [1, 2])])
+    assert raised.value.retry_after == config.QUIX_LOCKED_RETRY_SECONDS
+    assert conn.statements == []
+    assert sink._conn is conn  # not a failure: the connection is kept
+
+
+def test_insert_holds_the_lock_only_during_the_commit() -> None:
+    """The shared hold is released after the INSERT, whatever its outcome."""
+    lock = _FakeLock()
+    sink = _sink_with(_RecordingInsertConnection(), interval=3600, lock=lock)
+    sink._insert([_batch(0, [1, 2])])
+    assert lock.holds == 0
+    sink = _sink_with(_FailingInsertConnection(), interval=3600, lock=lock)
+    with pytest.raises(SinkBackpressureError):
+        sink._insert([_batch(0, [1])])
+    assert lock.holds == 0
+
+
+def test_inlined_flush_postponed_while_the_maintenance_holds_bronze() -> None:
+    """No flush during the maintenance, retried at the next checkpoint without waiting."""
+    conn = _FakeConnection()
+    lock = _FakeLock(held=True)
+    sink = _sink_with(conn, interval=3600, lock=lock)
+    sink._last_inlined_flush -= 3600
+    sink.flush()
+    assert conn.statements == []
+    lock.held = False
+    sink.flush()
+    assert len(conn.statements) == 1
 
 
 @pytest.mark.skipif(not _local_stack_up(), reason="local stack not running (make up)")
