@@ -100,20 +100,28 @@ def delete_expired_rows(
     alias: str,
     retention_days: dict[str, int],
     now: datetime | None = None,
+    retries: int = config.COMMIT_CONFLICT_RETRIES,
+    delay_seconds: float = config.COMMIT_CONFLICT_RETRY_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, int]:
     """DELETE the rows older than each schema's retention; rows deleted per table.
 
     Tables are found in the catalog, not listed here: a new Silver or Gold model gets
-    its schema's retention without a code change.
+    its schema's retention without a code change. Each DELETE is retried on a commit
+    conflict: DuckLake refuses it if Quix inserted into the table while it ran.
     """
     deleted = {}
     for schema, days in retention_days.items():
         cutoff = retention_cutoff(days, now)
         for table in list_tables(conn, alias, schema):
             column = time_column(conn, alias, schema, table)
-            deleted[f"{schema}.{table}"] = conn.execute(
-                f"DELETE FROM {alias}.{schema}.{table} WHERE {column} < ?", [cutoff]
-            ).fetchone()[0]
+            query = f"DELETE FROM {alias}.{schema}.{table} WHERE {column} < ?"
+            deleted[f"{schema}.{table}"], _ = retry_on_conflict(
+                lambda q=query, c=cutoff: conn.execute(q, [c]).fetchone()[0],
+                retries,
+                delay_seconds,
+                sleep,
+            )
     return deleted
 
 
@@ -141,27 +149,40 @@ def set_options(conn: duckdb.DuckDBPyConnection, alias: str) -> None:
         conn.execute(f"CALL {alias}.set_option('{option}', '{value}')")
 
 
-def checkpoint(
-    conn: duckdb.DuckDBPyConnection,
-    alias: str,
-    retries: int = config.CHECKPOINT_RETRIES,
-    delay_seconds: float = config.CHECKPOINT_RETRY_DELAY_SECONDS,
+def retry_on_conflict[T](
+    run: Callable[[], T],
+    retries: int = config.COMMIT_CONFLICT_RETRIES,
+    delay_seconds: float = config.COMMIT_CONFLICT_RETRY_DELAY_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
-) -> int:
-    """CHECKPOINT one catalog, retried on a commit conflict; returns the attempts made.
+) -> tuple[T, int]:
+    """Run a statement, again on a DuckLake commit conflict; its result and the attempts.
 
-    Quix commits to Bronze every 5 s, so the CHECKPOINT can lose the race for the next
-    snapshot id. Backoff grows with each attempt.
+    Quix commits to Bronze every 5 s, so a statement can lose the race for the next
+    snapshot id or touch a table Quix inserted into meanwhile. Backoff grows with each
+    attempt; a conflict that outlasts every retry reaches Dagster (alert).
     """
     for attempt in range(1, retries + 2):
         try:
-            conn.execute(f"CHECKPOINT {alias}")
-            return attempt
+            return run(), attempt
         except duckdb.TransactionException:
             if attempt > retries:
                 raise
             sleep(delay_seconds * attempt)
     raise AssertionError("unreachable")
+
+
+def checkpoint(
+    conn: duckdb.DuckDBPyConnection,
+    alias: str,
+    retries: int = config.COMMIT_CONFLICT_RETRIES,
+    delay_seconds: float = config.COMMIT_CONFLICT_RETRY_DELAY_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """CHECKPOINT one catalog, retried on a commit conflict; returns the attempts made."""
+    _, attempts = retry_on_conflict(
+        lambda: conn.execute(f"CHECKPOINT {alias}"), retries, delay_seconds, sleep
+    )
+    return attempts
 
 
 def stale_positions(
