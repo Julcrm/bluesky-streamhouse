@@ -186,7 +186,7 @@ ALTERNATION_LATE_TIME = "19:30"
 ALTERNATION_HARD_STOP_TIME = "06:30"
 # Branch B runs on this day, then A and B alternate (D1). A benchmark setting: kept here,
 # not in the environment (Coolify freezes a ${VAR:-default} at first deploy)
-ALTERNATION_START_DATE = date(2026, 10, 8)
+ALTERNATION_START_DATE = date(2026, 10, 7)
 # Neutral database (neither branch's catalog) on the shared Postgres: branch_calendar,
 # later the benchmark windows (phase 7)
 BENCHMARK_DB = os.getenv("BENCHMARK_DB", "bluesky_benchmark")
