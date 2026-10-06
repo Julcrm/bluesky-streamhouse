@@ -137,9 +137,10 @@ MAINTENANCE_CRON = "0 2 * * *"
 DUCKLAKE_EXPIRE_OLDER_THAN = "1 day"
 DUCKLAKE_DELETE_OLDER_THAN = "1 hour"
 DUCKLAKE_TARGET_FILE_SIZE = "512MB"
-# Quix commits every 5 s: a Bronze CHECKPOINT can lose the race and is retried
-CHECKPOINT_RETRIES = 3
-CHECKPOINT_RETRY_DELAY_SECONDS = 30
+# Quix commits every 5 s, so a Bronze retention DELETE or CHECKPOINT can conflict with
+# its inserts: each one is retried (the DELETE failed two nights in prod, 2026-10-05/06)
+COMMIT_CONFLICT_RETRIES = 3
+COMMIT_CONFLICT_RETRY_DELAY_SECONDS = 30
 # Same budget as the dbt profile, inside the 1.5 GB code server
 MAINTENANCE_DUCKDB_MEMORY_LIMIT = "1GB"
 MAINTENANCE_DUCKDB_THREADS = 2

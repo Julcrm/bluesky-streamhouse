@@ -104,6 +104,37 @@ def test_stale_positions_only_with_old_pending_snapshots(lake) -> None:
     assert maintenance.stale_positions(lake, ALIAS, positions, 24, datetime.now(UTC)) == {}
 
 
+class _ConflictingDeletes:
+    """Real catalog, but the first `failures` DELETEs lose to a concurrent insert."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection, failures: int) -> None:
+        self.conn = conn
+        self.failures = failures
+
+    def execute(self, sql: str, params: list | None = None) -> duckdb.DuckDBPyConnection:
+        if sql.startswith("DELETE") and self.failures:
+            self.failures -= 1
+            raise duckdb.TransactionException("another transaction has inserted into it")
+        return self.conn.execute(sql, params)
+
+
+def test_delete_retries_conflicts_with_quix_inserts(lake) -> None:
+    """Quix inserting during the DELETE (prod, 2026-10-05/06): retried, rows still go."""
+    waits = []
+    conn = _ConflictingDeletes(lake, failures=2)
+    deleted = maintenance.delete_expired_rows(conn, ALIAS, {"silver": 7}, NOW, 3, 10, waits.append)
+    assert deleted == {"silver.silver_likes": 32}
+    assert waits == [10, 20]
+
+
+def test_delete_gives_up_after_retries(lake) -> None:
+    """Still conflicting after every retry: the error reaches Dagster (alert)."""
+    conn = _ConflictingDeletes(lake, failures=10)
+    with pytest.raises(duckdb.TransactionException):
+        maintenance.delete_expired_rows(conn, ALIAS, {"silver": 7}, NOW, 3, 0, lambda _: None)
+    assert conn.failures == 6
+
+
 class _ConflictingConnection:
     """Fails the first `failures` CHECKPOINTs with a commit conflict."""
 
