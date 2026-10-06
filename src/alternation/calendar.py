@@ -216,6 +216,12 @@ class CalendarStore:
             )
             return [_row(r) for r in cur.fetchall()]
 
+    def recent(self, limit: int = 3) -> list[CalendarDay]:
+        """The latest days, newest first (alerts, Silver/Gold window)."""
+        with self._transaction() as cur:
+            cur.execute("SELECT * FROM branch_calendar ORDER BY day DESC LIMIT %s", (limit,))
+            return [_row(r) for r in cur.fetchall()]
+
     def active_for(self, branch: str) -> CalendarDay | None:
         """The day the engine of `branch` must work on now, if any (supervisor)."""
         days = [d for d in self.running_days() if d.effective_branch == branch]

@@ -6,6 +6,8 @@ Runs execute in this container (DefaultRunLauncher), so dbt and DuckDB memory co
 against its own limit: the cost of branch B's transformations stays attributable.
 """
 
+from datetime import UTC, datetime
+
 from dagster import (
     DefaultScheduleStatus,
     Definitions,
@@ -17,17 +19,21 @@ from dagster import (
 from dagster_dbt import DbtCliResource
 
 from src import config
+from src.alternation import calendar as cal
+from src.alternation import monitor
 from src.dagster.alternation import (
     branch_calendar,
     calendar_job,
     close_day_schedule,
+    completeness_job,
+    day_completeness,
     open_day_schedule,
 )
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.runs import active_location_runs, blocks_schedule
-from src.dagster.sensors import failure_alert_sensor
+from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
 
 __all__ = [
     "blocks_schedule",
@@ -48,13 +54,32 @@ __all__ = [
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every 15 min, one run at a time: a catch-up run can outlast the interval, and a
-    second dbt would wait on the first one's DuckDB file lock and fail."""
+    """Every 15 min on branch B's days only (D28), one run at a time: a catch-up run can
+    outlast the interval, and a second dbt would wait on the first one's DuckDB file
+    lock and fail."""
+    due = transform_due()
+    if due is None:
+        return SkipReason("No day of branch B running or just finished")
     # Any run of this code location blocks it, maintenance included (same catalogs)
     active = active_location_runs(context.instance, silver_gold_job.name)
     if active:
         return SkipReason(f"Run {active[0].run_id} ({active[0].job_name}) still in progress")
-    return RunRequest()
+    return RunRequest(tags={"bluesky/transform_due": due})
+
+
+def transform_due() -> str | None:
+    """Why branch B's Silver/Gold runs now (its engine runs, or stopped less than an
+    hour ago), None otherwise. CPU spent on dbt while branch A is measured would bias
+    the benchmark. Calendar unreachable: not run (the engine does not run either)."""
+    try:
+        conn = cal.connect_benchmark()
+        try:
+            days = cal.CalendarStore(conn).recent(3)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - table not created yet, or Postgres down
+        return None
+    return monitor.transform_due(days, cal.BRANCH_B, datetime.now(UTC))
 
 
 @schedule(
@@ -96,8 +121,14 @@ def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | 
 
 
 defs = Definitions(
-    assets=[quix_bronze, bluesky_dbt_models, *maintenance_assets, branch_calendar],
-    jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job],
+    assets=[
+        quix_bronze,
+        bluesky_dbt_models,
+        *maintenance_assets,
+        branch_calendar,
+        day_completeness,
+    ],
+    jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
     schedules=[
         silver_gold_schedule,
         maintenance_schedule,
@@ -105,6 +136,6 @@ defs = Definitions(
         open_day_schedule,
         close_day_schedule,
     ],
-    sensors=[failure_alert_sensor],
+    sensors=[failure_alert_sensor, calendar_alert_sensor],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

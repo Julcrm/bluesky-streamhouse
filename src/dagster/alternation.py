@@ -6,6 +6,8 @@ status in Dagster's history. No business logic here: see `src.alternation`.
 - 07:00 Europe/Paris: open the day for its branch (the engine's supervisor starts it).
 - 19:00: close it on the Kafka high watermarks, which also start the next day.
 - Manual force from the launchpad: `action: force`, `day`, `branch`.
+- `day_completeness`: every offset of a finished day of branch B is in Bronze (launched
+  by the calendar sensor, src/dagster/sensors.py).
 """
 
 from datetime import UTC, date, datetime
@@ -28,6 +30,8 @@ from dagster import (
 from src import config as settings
 from src.alternation import calendar as cal
 from src.alternation import control
+from src.alternation.completeness import missing_offsets
+from src.resources.ducklake import connect
 
 GROUP = "alternation"
 OPEN, CLOSE, FORCE = "open", "close", "force"
@@ -133,3 +137,61 @@ def open_day_schedule(context: ScheduleEvaluationContext) -> RunRequest:
 def close_day_schedule(context: ScheduleEvaluationContext) -> RunRequest:
     """19:00: bounds of the day, start of the next one."""
     return _calendar_request(CLOSE)
+
+
+class CompletenessDay(Config):
+    """The finished day to check (ISO date)."""
+
+    day: str
+
+
+@asset(
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, GROUP],
+    group_name=GROUP,
+    description="Every Kafka offset of a finished day of branch B is in Bronze (D28).",
+)
+def day_completeness(context: AssetExecutionContext, config: CompletenessDay) -> MaterializeResult:
+    """Count the day's offsets in Bronze; a missing one fails the run (alert)."""
+    conn = cal.connect_benchmark()
+    try:
+        day = cal.CalendarStore(conn).get(date.fromisoformat(config.day))
+    finally:
+        conn.close()
+    if day is None or day.end_offsets is None:
+        raise Failure(f"Day {config.day} is not closed", allow_retries=False)
+    lake = connect(read_only=True)
+    try:
+        missing = missing_offsets(lake, day)
+    finally:
+        lake.close()
+    metadata = {
+        "day": day.day.isoformat(),
+        "branch": day.effective_branch,
+        "messages": control.day_messages(day) or 0,
+        "missing": sum(missing.values()),
+        "missing_by_partition": {str(p): n for p, n in missing.items()},
+    }
+    if any(missing.values()):
+        raise Failure(
+            f"Day {day.day}: {sum(missing.values())} offsets of the day missing from Bronze "
+            f"({missing})",
+            metadata=metadata,
+            allow_retries=False,
+        )
+    context.log.info(f"Day {day.day}: all {metadata['messages']} offsets are in Bronze")
+    return MaterializeResult(metadata=metadata)
+
+
+completeness_job = define_asset_job(
+    name="bluesky_day_completeness",
+    selection=[day_completeness],
+    description="Every Kafka offset of a finished day of branch B is in Bronze (D28).",
+)
+
+
+def completeness_request(day: date) -> RunRequest:
+    """One completeness run per day (the run key makes it once)."""
+    return RunRequest(
+        run_key=f"completeness:{day.isoformat()}",
+        run_config={"ops": {day_completeness.op.name: {"config": {"day": day.isoformat()}}}},
+    )

@@ -198,6 +198,15 @@ CAUGHT_UP_LAG_SECONDS = 10
 # Silver/Gold of a branch keep running this long after its engine stopped: the last
 # Bronze commits of the day still have to reach Gold
 TRANSFORM_TAIL_SECONDS = 60 * 60
+# Branches whose engine is deployed: days of another branch are skipped without alert
+# (B runs alone first, D28). Becomes ("A", "B") when branch A is deployed
+DEPLOYED_BRANCHES = ("B",)
+# Calendar alerts (email), each once per day: engine not started this long after the
+# opening, day still open this long after the close (never closed), day still closing
+# this long after the guard time (the supervisor did not act)
+ALERT_NOT_STARTED_MINUTES = 15
+ALERT_NOT_CLOSED_MINUTES = 15
+ALERT_GUARD_MISSED_MINUTES = 15
 
 # --- Alerts (Resend, as velib) ---
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
