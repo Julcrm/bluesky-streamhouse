@@ -185,6 +185,11 @@ services:
       DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
       DAGSTER_POSTGRES_HOST: postgres
       DAGSTER_POSTGRES_DB: dagster
+      # Benchmark calendar (D28): completeness of A's days
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
       SPARK_DRIVER_JAVA_OPTIONS: >-
         -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
         -Xss512k -XX:+ExitOnOutOfMemoryError

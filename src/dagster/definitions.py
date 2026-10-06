@@ -26,7 +26,7 @@ from src.dagster.alternation import (
     calendar_job,
     close_day_schedule,
     completeness_job,
-    day_completeness,
+    ducklake_day_completeness,
     open_day_schedule,
 )
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
@@ -126,7 +126,7 @@ defs = Definitions(
         bluesky_dbt_models,
         *maintenance_assets,
         branch_calendar,
-        day_completeness,
+        ducklake_day_completeness,
     ],
     jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
     schedules=[

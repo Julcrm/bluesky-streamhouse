@@ -223,6 +223,11 @@ services:
       - DAGSTER_POSTGRES_PASSWORD=${DAGSTER_POSTGRES_PASSWORD}
       - DAGSTER_POSTGRES_HOST=${DAGSTER_POSTGRES_HOST}
       - DAGSTER_POSTGRES_DB=${DAGSTER_POSTGRES_DB}
+      # Benchmark calendar (database bluesky_benchmark, D28): completeness of A's days
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2

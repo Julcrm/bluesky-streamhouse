@@ -4,7 +4,8 @@ Dagster Definitions of branch A, served by the gRPC code server `bluesky_spark`
 
 Runs execute in this container (DefaultRunLauncher), so Spark's memory counts against
 its own limit (1.5 GB, like branch B's code server). Phase 4: Iceberg maintenance of the
-Bronze table; phase 5 adds the dbt-spark Silver/Gold models here.
+Bronze table; phase 6: completeness check of A's days (src/dagster/spark_alternation.py);
+phase 5 adds the dbt-spark Silver/Gold models here.
 """
 
 import time
@@ -26,6 +27,11 @@ from dagster import (
 from src import config
 from src.dagster.alerts import failure_alert_sensor
 from src.dagster.runs import active_location_runs
+from src.dagster.spark_alternation import (
+    iceberg_completeness_job,
+    iceberg_completeness_sensor,
+    iceberg_day_completeness,
+)
 from src.maintenance import iceberg
 from src.processing.bronze import BRONZE_TABLE
 from src.resources.spark import build_session
@@ -113,8 +119,13 @@ def iceberg_maintenance_schedule(context: ScheduleEvaluationContext) -> RunReque
 
 
 defs = Definitions(
-    assets=[iceberg_bronze_maintenance],
-    jobs=[iceberg_maintenance_job],
+    assets=[iceberg_bronze_maintenance, iceberg_day_completeness],
+    jobs=[iceberg_maintenance_job, iceberg_completeness_job],
     schedules=[iceberg_maintenance_schedule],
-    sensors=[failure_alert_sensor("spark_failure_alert_sensor", [iceberg_maintenance_job])],
+    sensors=[
+        failure_alert_sensor(
+            "spark_failure_alert_sensor", [iceberg_maintenance_job, iceberg_completeness_job]
+        ),
+        iceberg_completeness_sensor,
+    ],
 )

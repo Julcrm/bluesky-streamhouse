@@ -23,7 +23,7 @@ from src.alternation import calendar as cal
 from src.alternation import monitor
 from src.dagster.alerts import failure_alert_sensor as _failure_alert_sensor
 from src.dagster.alerts import send_email, send_failure_email
-from src.dagster.alternation import calendar_job, completeness_job, completeness_request
+from src.dagster.alternation import calendar_job, completeness_job, completeness_request_b
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 
 __all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_failure_email"]
@@ -64,7 +64,7 @@ def calendar_alert_sensor(context: SensorEvaluationContext) -> list[RunRequest] 
         sent.append(alert.key)
     context.update_cursor(json.dumps(sent[-SENT_ALERTS_KEPT:]))
     requests_ = [
-        completeness_request(day.day)
+        completeness_request_b(day.day)
         for day in days
         if day.status == cal.DONE and day.effective_branch == cal.BRANCH_B
     ]

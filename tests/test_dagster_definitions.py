@@ -195,6 +195,7 @@ def test_spark_code_location_loads_without_branch_b() -> None:
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     assert keys == {"bluesky/maintenance/iceberg_bronze_maintenance"}
     assert defs.get_sensor_def("spark_failure_alert_sensor") is not None
+    assert defs.get_sensor_def("iceberg_completeness_sensor") is not None
     assert defs.get_schedule_def("iceberg_maintenance_schedule") is not None
     # In a fresh interpreter: loading branch A must not load branch B's modules
     loaded = subprocess.run(
