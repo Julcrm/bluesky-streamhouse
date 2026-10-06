@@ -8,6 +8,7 @@ does not wait for the other), storage checks, then the purge of old Dagster runs
 """
 
 import time
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 from dagster import (
@@ -27,6 +28,7 @@ from src import config
 from src.dagster.runs import in_location, wait_for_runs
 from src.maintenance import ducklake as maintenance
 from src.processing.backlog import GOLD_SCHEMA, gold_positions, silver_positions
+from src.resources.bronze_lock import exclusive_bronze_lock
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
 
 GROUP = "maintenance"
@@ -74,22 +76,35 @@ def _maintain(
     """Guard, retention DELETE, options, CHECKPOINT; figures before and after."""
     _guard(context, stale, settings.alias)
     started = time.monotonic()
+    # Quix writes Bronze 24/7 until the alternation (D28): it pauses while the
+    # maintenance holds the Bronze write lock. dbt never runs during the maintenance
+    is_bronze = settings.alias == config.DUCKLAKE_BRONZE_ALIAS
     conn = maintenance.maintenance_connection(settings)
     try:
         before = maintenance.catalog_stats(conn, settings)
-        deleted = maintenance.delete_expired_rows(conn, settings.alias, retention_days)
-        if settings.alias == config.DUCKLAKE_TRANSFORM_ALIAS:
-            deleted["meta.silver_progress"] = maintenance.trim_silver_progress(conn)
-        maintenance.set_options(conn, settings.alias)
-        checkpoint_started = time.monotonic()
-        attempts = maintenance.checkpoint(conn, settings.alias)
-        checkpoint_seconds = time.monotonic() - checkpoint_started
+        lock_started = time.monotonic()
+        with exclusive_bronze_lock(settings) if is_bronze else nullcontext():
+            lock_wait_seconds = time.monotonic() - lock_started
+            delete_started = time.monotonic()
+            deleted = maintenance.delete_expired_rows(conn, settings.alias, retention_days)
+            delete_seconds = time.monotonic() - delete_started
+            if settings.alias == config.DUCKLAKE_TRANSFORM_ALIAS:
+                deleted["meta.silver_progress"] = maintenance.trim_silver_progress(conn)
+            maintenance.set_options(conn, settings.alias)
+            checkpoint_started = time.monotonic()
+            attempts = maintenance.checkpoint(conn, settings.alias)
+            checkpoint_seconds = time.monotonic() - checkpoint_started
+            writers_paused_seconds = time.monotonic() - lock_started if is_bronze else 0.0
         after = maintenance.catalog_stats(conn, settings)
     finally:
         conn.close()
     return MaterializeResult(
         metadata={
             "rows_deleted": deleted,
+            "delete_seconds": round(delete_seconds, 1),
+            "lock_wait_seconds": round(lock_wait_seconds, 1),
+            # How long Quix stayed paused (Bronze only): it catches up afterwards
+            "writers_paused_seconds": round(writers_paused_seconds, 1),
             "checkpoint_attempts": attempts,
             "checkpoint_seconds": round(checkpoint_seconds, 1),
             "duration_seconds": round(time.monotonic() - started, 1),

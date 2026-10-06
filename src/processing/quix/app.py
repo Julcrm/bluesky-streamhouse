@@ -11,7 +11,8 @@ Live checkpoints are inlined in the Postgres catalog and flushed to Parquet ever
 minutes by the sink itself (decision D15). Rows still inlined when the app stops are
 flushed at the next start or by the nightly maintenance (phase 3). Bronze has its own
 DuckLake catalog: dbt commits Silver and Gold in another one, so they never compete with
-the sink for snapshot ids.
+the sink for snapshot ids. Every write holds the Bronze write lock shared: while the
+nightly maintenance holds it, the sink pauses and catches up afterwards.
 """
 
 import time
@@ -19,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import duckdb
+import psycopg2
 import pyarrow as pa
 from loguru import logger
 from quixstreams import Application
@@ -34,6 +36,7 @@ from src.processing.bronze import (
     duckdb_partition_ddl,
     parse_bronze_event,
 )
+from src.resources.bronze_lock import SharedBronzeLock
 from src.resources.ducklake import DuckLakeSettings, connect, set_write_options, sql_literal
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
@@ -51,6 +54,8 @@ RECOVERABLE_ERRORS = (
     duckdb.TransactionException,
     duckdb.InternalException,
     duckdb.FatalException,
+    # The Bronze write lock's Postgres session
+    psycopg2.Error,
 )
 
 # Arrow types matching the DuckDB types of the Bronze contract
@@ -106,9 +111,11 @@ class DuckLakeBronzeSink(BatchingSink):
         self,
         settings: DuckLakeSettings | None = None,
         inlined_flush_interval: float = config.DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS,
+        lock: SharedBronzeLock | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings or DuckLakeSettings()
+        self._lock = lock or SharedBronzeLock(self._settings)
         self._table = f"{self._settings.alias}.main.{BRONZE_TABLE}"
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._inlined_flush_interval = inlined_flush_interval
@@ -159,14 +166,22 @@ class DuckLakeBronzeSink(BatchingSink):
         alias, schema, table = self._table.split(".")
         started = time.perf_counter()
         try:
-            flushed = (
-                self._connection()
-                .execute(
-                    f"CALL ducklake_flush_inlined_data({sql_literal(alias)}, "
-                    f"schema_name => {sql_literal(schema)}, table_name => {sql_literal(table)})"
+            if not self._lock.try_acquire():
+                logger.info("Bronze maintenance running, inlined flush postponed")
+                self._last_inlined_flush = float("-inf")
+                return
+            try:
+                flushed = (
+                    self._connection()
+                    .execute(
+                        f"CALL ducklake_flush_inlined_data({sql_literal(alias)}, "
+                        f"schema_name => {sql_literal(schema)}, "
+                        f"table_name => {sql_literal(table)})"
+                    )
+                    .fetchall()
                 )
-                .fetchall()
-            )
+            finally:
+                self._lock.release()
         except RECOVERABLE_ERRORS as e:
             logger.warning(f"Inlined data flush failed ({e}), retrying at the next checkpoint")
             self._close()
@@ -183,15 +198,25 @@ class DuckLakeBronzeSink(BatchingSink):
         rows_table = arrow_table_from_batches(batches, processed_at)
         started = time.perf_counter()
         try:
-            conn = self._connection()
-            conn.register("bronze_batch", rows_table)
-            try:
-                conn.execute(
-                    f"INSERT INTO {self._table} ({', '.join(BRONZE_COLUMN_NAMES)}) "
-                    f"SELECT {', '.join(BRONZE_COLUMN_NAMES)} FROM bronze_batch"
+            if not self._lock.try_acquire():
+                # The nightly maintenance holds Bronze: offsets stay uncommitted and Quix
+                # replays the checkpoint once it is done (not an error)
+                logger.info(
+                    f"Bronze maintenance running, pausing {config.QUIX_LOCKED_RETRY_SECONDS:.0f}s"
                 )
+                raise SinkBackpressureError(retry_after=config.QUIX_LOCKED_RETRY_SECONDS)
+            try:
+                conn = self._connection()
+                conn.register("bronze_batch", rows_table)
+                try:
+                    conn.execute(
+                        f"INSERT INTO {self._table} ({', '.join(BRONZE_COLUMN_NAMES)}) "
+                        f"SELECT {', '.join(BRONZE_COLUMN_NAMES)} FROM bronze_batch"
+                    )
+                finally:
+                    conn.unregister("bronze_batch")
             finally:
-                conn.unregister("bronze_batch")
+                self._lock.release()
         except RECOVERABLE_ERRORS as e:
             # Garage or Postgres unavailable: offsets are not committed, Quix pauses and
             # seeks back to the checkpoint start, then retries with a fresh connection
@@ -207,7 +232,8 @@ class DuckLakeBronzeSink(BatchingSink):
         )
 
     def _close(self) -> None:
-        """Drop the connection; never raises, the instance may already be invalidated."""
+        """Drop the connections; never raises, the instance may already be invalidated."""
+        self._lock.close()
         if self._conn is not None:
             try:
                 self._conn.close()

@@ -232,6 +232,7 @@ dagster = [
     { name = "dagster-postgres" },
     { name = "dbt-core" },
     { name = "dbt-duckdb" },
+    { name = "psycopg2-binary" },
     { name = "requests" },
     { name = "s3fs" },
 ]
@@ -247,6 +248,7 @@ producer = [
 ]
 quix = [
     { name = "duckdb" },
+    { name = "psycopg2-binary" },
     { name = "pyarrow" },
     { name = "quixstreams" },
 ]
@@ -275,6 +277,7 @@ dagster = [
     { name = "dagster-postgres" },
     { name = "dbt-core", specifier = ">=1.12,<1.13" },
     { name = "dbt-duckdb", specifier = ">=1.11,<1.12" },
+    { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "requests", specifier = ">=2.32" },
     { name = "s3fs" },
 ]
@@ -290,6 +293,7 @@ producer = [
 ]
 quix = [
     { name = "duckdb", specifier = ">=1.5,<1.6" },
+    { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pyarrow", specifier = ">=20" },
     { name = "quixstreams", specifier = ">=3.26,<4" },
 ]

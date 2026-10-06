@@ -22,6 +22,8 @@ quix = [
     "quixstreams>=3.26,<4",
     "duckdb>=1.5,<1.6",
     "pyarrow>=20",
+    # Bronze write lock shared with the maintenance (src/resources/bronze_lock.py)
+    "psycopg2-binary>=2.9",
 ]
 spark = [
     "pyspark==4.1.3",
@@ -32,6 +34,7 @@ dagster = [
     "dagster>=1.13,<1.14",
     "dagster-dbt>=0.29,<0.30",
     "dagster-postgres",
+    "psycopg2-binary>=2.9",
     "dbt-core>=1.12,<1.13",
     "dbt-duckdb>=1.11,<1.12",
     "requests>=2.32",

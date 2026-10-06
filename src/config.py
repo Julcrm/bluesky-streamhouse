@@ -137,8 +137,13 @@ MAINTENANCE_CRON = "0 2 * * *"
 DUCKLAKE_EXPIRE_OLDER_THAN = "1 day"
 DUCKLAKE_DELETE_OLDER_THAN = "1 hour"
 DUCKLAKE_TARGET_FILE_SIZE = "512MB"
-# Quix commits every 5 s, so a Bronze retention DELETE or CHECKPOINT can conflict with
-# its inserts: each one is retried (the DELETE failed two nights in prod, 2026-10-05/06)
+# Quix commits to Bronze every 5 s: DuckLake refuses a retention DELETE on a table it
+# inserted into meanwhile (failed two nights in prod, 2026-10-05/06). The Bronze
+# maintenance holds this Postgres advisory lock exclusive, each sink commit holds it
+# shared, and the sink pauses (backpressure) while the maintenance runs
+BRONZE_WRITE_LOCK_KEY = 2_026_100_601
+QUIX_LOCKED_RETRY_SECONDS = 30.0
+# A DELETE or CHECKPOINT losing a commit race anyway (another writer) is retried
 COMMIT_CONFLICT_RETRIES = 3
 COMMIT_CONFLICT_RETRY_DELAY_SECONDS = 30
 # Same budget as the dbt profile, inside the 1.5 GB code server
