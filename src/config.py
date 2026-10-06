@@ -6,6 +6,7 @@ loaded from `.env` when present (local runs; containers get real env vars).
 """
 
 import os
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -55,7 +56,7 @@ QUIX_COMMIT_EVERY = 50_000
 # 10 s shortens recovery after a kill. Heartbeats (3 s default) must stay below a third
 QUIX_SESSION_TIMEOUT_MS = 10_000
 # Without committed offsets, start from the oldest retained event (no silent skip).
-# Phase 6 replaces this with explicit 19:00 → 19:00 offsets (D10)
+# The alternation (D28) writes each day's start offsets to the group before the start
 QUIX_AUTO_OFFSET_RESET = os.getenv("QUIX_AUTO_OFFSET_RESET", "earliest")
 
 # --- Garage / S3 ---
@@ -171,6 +172,46 @@ NIGHTLY_CHECKS_TAG = "bluesky/nightly_checks"
 NIGHTLY_TEST_VARS = {"test_window": "INTERVAL 1 DAY", "gold_check_window": "INTERVAL 1 DAY"}
 # Waits for any other run of the location (Silver/Gold, maintenance), up to this long
 NIGHTLY_CHECKS_WAIT_SECONDS = 2 * 60 * 60
+
+# --- Alternation, one branch per day (decisions D1, D10, D28) ---
+# Benchmark day J = 19:00 (J-1) -> 19:00 (J), Europe/Paris. The branch of J starts at
+# 07:00, catches up the night from Redpanda, then runs live until its 19:00 bounds
+ALTERNATION_TIMEZONE = "Europe/Paris"
+ALTERNATION_OPEN_TIME = "07:00"
+ALTERNATION_CLOSE_TIME = "19:00"
+# An engine still running at this time is marked late (alert) and keeps going: no engine
+# runs at night, so it may finish its day. Late days stay in the benchmark, marked
+ALTERNATION_LATE_TIME = "19:30"
+# Hard stop the next morning, before the next opening: an engine still running is
+# stopped and its day is incomplete (messages missing from its Bronze)
+ALTERNATION_HARD_STOP_TIME = "06:30"
+# Branch B runs on this day, then A and B alternate (D1). A benchmark setting: kept here,
+# not in the environment (Coolify freezes a ${VAR:-default} at first deploy)
+ALTERNATION_START_DATE = date(2026, 10, 7)
+# Neutral database (neither branch's catalog) on the shared Postgres: branch_calendar,
+# later the benchmark windows (phase 7)
+BENCHMARK_DB = os.getenv("BENCHMARK_DB", "bluesky_benchmark")
+# The supervisor of each engine container reads the calendar this often
+SUPERVISOR_POLL_SECONDS = 30
+# A crashed engine is restarted after this long (same day, from its last commit)
+SUPERVISOR_RESTART_DELAY_SECONDS = 30
+# Engines read their day's bounds this often while running (end offsets appear at 19:00)
+ENGINE_BOUNDS_POLL_SECONDS = 30
+# Caught up = first commit whose newest event is less than this old (same rule for A and
+# B, D28): separates the 07:00 catch-up from live processing in the benchmark
+CAUGHT_UP_LAG_SECONDS = 10
+# Silver/Gold of a branch keep running this long after its engine stopped: the last
+# Bronze commits of the day still have to reach Gold
+TRANSFORM_TAIL_SECONDS = 60 * 60
+# Branches whose engine is deployed: days of another branch are skipped without alert
+# (B runs alone first, D28). Becomes ("A", "B") when branch A is deployed
+DEPLOYED_BRANCHES = ("B",)
+# Calendar alerts (email), each once per day: engine not started this long after the
+# opening, day still open this long after the close (never closed), day still running
+# this long after the hard stop (the supervisor did not act)
+ALERT_NOT_STARTED_MINUTES = 15
+ALERT_NOT_CLOSED_MINUTES = 15
+ALERT_STOP_MISSED_MINUTES = 15
 
 # --- Alerts (Resend, as velib) ---
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")

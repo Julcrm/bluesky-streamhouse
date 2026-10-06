@@ -39,6 +39,8 @@ dagster = [
     "dagster-dbt>=0.29,<0.30",
     "dagster-postgres",
     "psycopg2-binary>=2.9",
+    # Kafka offsets of the alternation bounds (src/resources/redpanda.py)
+    "confluent-kafka>=2.8.2,<2.12",
     "dbt-core>=1.12,<1.13",
     "dbt-duckdb>=1.11,<1.12",
     "requests>=2.32",

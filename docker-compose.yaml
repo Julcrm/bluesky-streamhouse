@@ -2,7 +2,8 @@
 # Bluesky Streamhouse — Docker Compose (production, Coolify)
 # Services:
 #   - producer: Jetstream v2 -> Redpanda `raw_events` (no exposed port)
-#   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port)
+#   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port), run by
+#     its supervisor on B's days only (D28, calendar in the bluesky_benchmark database)
 #   - bluesky-duckdb: branch B Dagster gRPC code server, Silver/Gold dbt assets
 #     (port 4000 on the coolify network only; the service name is its DNS alias)
 #   - lakekeeper (+ one-shot lakekeeper-migrate, lakekeeper-init): Iceberg REST
@@ -96,6 +97,8 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=us-east-1
       - BUCKET=${BUCKET:-bluesky-streamhouse}
+      # Kafka high watermarks: the 19:00 bounds of the alternation (D28)
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       # Failure alerts by email (Resend, as velib); none are sent while unset
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ALERT_EMAIL=${ALERT_EMAIL}

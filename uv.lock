@@ -227,6 +227,7 @@ benchmark = [
     { name = "docker" },
 ]
 dagster = [
+    { name = "confluent-kafka" },
     { name = "dagster" },
     { name = "dagster-dbt" },
     { name = "dagster-postgres" },
@@ -275,6 +276,7 @@ api = [
 ]
 benchmark = [{ name = "docker", specifier = ">=7" }]
 dagster = [
+    { name = "confluent-kafka", specifier = ">=2.8.2,<2.12" },
     { name = "dagster", specifier = ">=1.13,<1.14" },
     { name = "dagster-dbt", specifier = ">=0.29,<0.30" },
     { name = "dagster-postgres" },
