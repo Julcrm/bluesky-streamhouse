@@ -8,7 +8,11 @@ import duckdb
 
 from src.alternation import calendar as cal
 from src.alternation import monitor
-from src.alternation.completeness import missing_offsets
+from src.alternation.completeness import (
+    completeness_metadata,
+    missing_offsets,
+    offsets_query,
+)
 
 DAY = cal.CalendarDay(
     day=datetime(2026, 10, 8).date(),
@@ -80,15 +84,18 @@ def test_transform_runs_on_b_days_and_one_hour_after() -> None:
     assert monitor.transform_due([], "B", OPEN_UTC) is None
 
 
-def test_missing_offsets_counts_distinct_offsets_in_bounds() -> None:
-    """Duplicates and offsets outside the day do not hide a hole."""
+def test_completeness_query_counts_distinct_offsets_in_bounds() -> None:
+    """One scan for every partition; duplicates and offsets outside the day do not hide
+    a hole. Plain SQL: the same query runs in DuckDB (B) and Spark SQL (A)."""
     conn = duckdb.connect()
-    conn.execute("ATTACH ':memory:' AS bronze")
     conn.execute(
-        "CREATE TABLE bronze.main.bronze_events AS SELECT * FROM (VALUES "
+        "CREATE TABLE bronze_events AS SELECT * FROM (VALUES "
         "(0, 100), (0, 101), (0, 101), (0, 102), (0, 99), (0, 103), "  # partition 0 complete
-        "(1, 200), (1, 202)"  # partition 1 lacks 201
+        "(1, 200), (1, 202)"  # partition 1 lacks 201, partition 2 has nothing
         ") AS t(kafka_partition, kafka_offset)"
     )
-    day = replace(DAY, end_offsets={0: 103, 1: 203})
-    assert missing_offsets(conn, day) == {0: 0, 1: 1}
+    day = replace(DAY, start_offsets={0: 100, 1: 200, 2: 300}, end_offsets={0: 103, 1: 203, 2: 301})
+    found = dict(conn.execute(offsets_query("bronze_events", day)).fetchall())
+    assert missing_offsets(day, found) == {0: 0, 1: 1, 2: 1}
+    metadata = completeness_metadata(day, missing_offsets(day, found))
+    assert (metadata["messages"], metadata["missing"]) == (7, 2)

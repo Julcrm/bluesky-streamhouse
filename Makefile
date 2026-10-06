@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark dbt-build dbt-parse dagster clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark iceberg-maintenance dbt-build dbt-parse dagster clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -67,6 +67,10 @@ quix: check_uv
 # Branch A streaming job, in a container of the stack (Lakekeeper hands out garage:3900)
 spark:
 	$(COMPOSE_DEV) --profile spark up -d --build spark
+
+# Branch A Iceberg maintenance, once, with the bluesky_spark code location image
+iceberg-maintenance:
+	$(COMPOSE_DEV) --profile spark run --rm --build iceberg-maintenance
 
 # Branch B Silver/Gold on the local DuckLake (dbt does not read .env itself)
 DBT_DUCKDB = set -a && . ./.env && set +a && cd dbt/duckdb && uv run dbt
