@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from src import config
 from src.alternation import calendar as cal
 from tests.test_resources_ducklake import _local_stack_up
 
@@ -60,7 +61,9 @@ NOW = datetime(2026, 10, 8, 5, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def store():
+def store(monkeypatch):
+    # The rotation counts from the configured start date: tests use their own
+    monkeypatch.setattr(config, "ALTERNATION_START_DATE", START)
     if not _local_stack_up():
         pytest.skip("local stack not running (make up)")
     admin = cal.connect_benchmark("postgres")
