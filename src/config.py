@@ -229,6 +229,15 @@ ICEBERG_BRONZE_NAMESPACE = "bronze"
 # Streaming state (Kafka offsets, batch ids) on a local volume: a checkpoint needs
 # atomic renames, which S3 and Garage do not offer
 SPARK_CHECKPOINT_DIR = os.getenv("SPARK_CHECKPOINT_DIR", "state/spark-checkpoint/bronze")
+# One checkpoint per benchmark day under this directory (D28): a new day starts from its
+# start offsets (startingOffsets is only read by a new checkpoint), a restart in the day
+# resumes its own. The last days are kept, older ones deleted
+SPARK_DAY_CHECKPOINTS_DIR = os.getenv("SPARK_DAY_CHECKPOINTS_DIR", "state/spark-checkpoint/days")
+SPARK_DAY_CHECKPOINTS_KEPT = 2
+# Snapshot summary property holding "<query id>:<batch id>" of each Bronze append: a
+# micro-batch replayed after a crash finds its key and is not written twice (what the
+# native Iceberg streaming sink does, redone in foreachBatch for the day bounds)
+SPARK_BATCH_SNAPSHOT_PROPERTY = "bluesky.streaming-batch"
 # Same cadence and batch cap as Quix (decisions D13, D10 parity): 5 s, 50 000 messages
 SPARK_TRIGGER_INTERVAL = f"{int(QUIX_COMMIT_INTERVAL_SECONDS)} seconds"
 SPARK_MAX_OFFSETS_PER_TRIGGER = QUIX_COMMIT_EVERY
