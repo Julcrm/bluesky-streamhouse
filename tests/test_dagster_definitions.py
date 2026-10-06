@@ -31,8 +31,14 @@ def test_definitions_load() -> None:
     assert len(defs.get_repository_def().asset_graph.asset_check_keys) > 0
 
 
-def test_schedule_runs_when_idle() -> None:
-    """No run in progress: the schedule requests a run."""
+@pytest.fixture
+def b_day_running(monkeypatch) -> None:
+    """The calendar gives a running day to branch B."""
+    monkeypatch.setattr("src.dagster.definitions.transform_due", lambda: "day 2026-10-08 is open")
+
+
+def test_schedule_runs_when_idle(b_day_running) -> None:
+    """A day of B and no run in progress: the schedule requests a run."""
     from src.dagster.definitions import silver_gold_schedule
 
     with instance_for_test() as instance:
@@ -40,7 +46,17 @@ def test_schedule_runs_when_idle() -> None:
     assert isinstance(result, RunRequest)
 
 
-def test_schedule_skips_while_a_run_is_active() -> None:
+def test_schedule_skips_outside_branch_b_days(monkeypatch) -> None:
+    """A's day (or no calendar): no dbt in branch B, its CPU would bias A's measures."""
+    from src.dagster.definitions import silver_gold_schedule
+
+    monkeypatch.setattr("src.dagster.definitions.transform_due", lambda: None)
+    with instance_for_test() as instance:
+        result = silver_gold_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, SkipReason)
+
+
+def test_schedule_skips_while_a_run_is_active(b_day_running) -> None:
     """A catch-up run still going: the next tick is skipped, never two runs at once."""
     from src.dagster.definitions import defs, silver_gold_job, silver_gold_schedule
 
@@ -100,6 +116,7 @@ def test_maintenance_job_loads() -> None:
     checks = {key.name for key in defs.get_repository_def().asset_graph.asset_check_keys}
     assert {"bucket_under_alert", "catalog_under_alert"} <= checks
     assert defs.get_sensor_def("failure_alert_sensor") is not None
+    assert defs.get_sensor_def("calendar_alert_sensor") is not None
 
 
 def test_maintenance_schedule_skips_while_previous_maintenance_runs() -> None:
@@ -141,7 +158,7 @@ def test_every_asset_sits_in_the_project_folder() -> None:
     from src.dagster.definitions import defs
 
     graph = defs.get_repository_def().asset_graph
-    layers = {"bronze", "silver", "gold", "maintenance"}
+    layers = {"bronze", "silver", "gold", "maintenance", "alternation"}
     for key in graph.get_all_asset_keys():
         assert key.path[0] == "bluesky" and key.path[1] in layers, key
         assert graph.get(key).group_name == key.path[1], key

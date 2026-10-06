@@ -13,20 +13,29 @@ flushed at the next start or by the nightly maintenance (phase 3). Bronze has it
 DuckLake catalog: dbt commits Silver and Gold in another one, so they never compete with
 the sink for snapshot ids. Every write holds the Bronze write lock shared: while the
 nightly maintenance holds it, the sink pauses and catches up afterwards.
+
+Started by the supervisor (decision D28), the app works on one benchmark day: it starts
+from the day's start offsets, drops what is past its end offsets, records when it caught
+up, and marks the day done once its commits reach the end (src.alternation.engine).
+Run by hand without ALTERNATION_DAY, it consumes without bounds (local development).
 """
 
+import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import duckdb
 import psycopg2
 import pyarrow as pa
+import pyarrow.compute as pc
 from loguru import logger
-from quixstreams import Application
+from quixstreams import Application, message_context
 from quixstreams.sinks import BatchingSink, SinkBackpressureError, SinkBatch
 
 from src import config
+from src.alternation.engine import EngineDay
 from src.processing.bronze import (
     BRONZE_COLUMN_NAMES,
     BRONZE_COLUMNS,
@@ -36,11 +45,14 @@ from src.processing.bronze import (
     duckdb_partition_ddl,
     parse_bronze_event,
 )
+from src.resources import redpanda
 from src.resources.bronze_lock import SharedBronzeLock
 from src.resources.ducklake import DuckLakeSettings, connect, set_write_options, sql_literal
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
+# How often the app checks whether its committed offsets reached the day's end
+COMPLETION_CHECK_SECONDS = 10.0
 
 # Errors a fresh connection recovers from (the INSERT is atomic, so replaying the
 # checkpoint is safe): Garage or Postgres down; DuckLake's commit retries exhausted
@@ -112,10 +124,13 @@ class DuckLakeBronzeSink(BatchingSink):
         settings: DuckLakeSettings | None = None,
         inlined_flush_interval: float = config.DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS,
         lock: SharedBronzeLock | None = None,
+        on_commit: Callable[[pa.Table], None] | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings or DuckLakeSettings()
         self._lock = lock or SharedBronzeLock(self._settings)
+        # Called with the rows of each committed checkpoint (caught-up detection, D28)
+        self._on_commit = on_commit
         self._table = f"{self._settings.alias}.main.{BRONZE_TABLE}"
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._inlined_flush_interval = inlined_flush_interval
@@ -230,6 +245,8 @@ class DuckLakeBronzeSink(BatchingSink):
             f"Bronze commit: {rows_table.num_rows} rows from {len(batches)} partitions "
             f"in {elapsed_ms:.0f} ms"
         )
+        if self._on_commit is not None:
+            self._on_commit(rows_table)
 
     def _close(self) -> None:
         """Drop the connections; never raises, the instance may already be invalidated."""
@@ -261,14 +278,55 @@ def build_app() -> Application:
     )
 
 
+def newest_event_time(rows: pa.Table) -> datetime | None:
+    """Most recent event_time of a committed checkpoint (None when empty)."""
+    return pc.max(rows.column("event_time")).as_py()
+
+
+def in_day(day: EngineDay) -> Callable[[Any], bool]:
+    """Filter keeping the messages before the day's end offsets (known from 19:00)."""
+
+    def keep(_value: Any) -> bool:
+        context = message_context()
+        return day.in_bounds(context.partition, context.offset)
+
+    return keep
+
+
+def watch_completion(day: EngineDay, stop: threading.Event) -> None:
+    """Mark the day done once the group's committed offsets reach its end. Quix commits
+    only after the sink flushed, so every message before the end is in Bronze."""
+    while not stop.wait(COMPLETION_CHECK_SECONDS):
+        try:
+            position = redpanda.committed_offsets(config.QUIX_CONSUMER_GROUP)
+        except Exception as e:  # noqa: BLE001 - checked again at the next interval
+            logger.warning(f"Reading the committed offsets failed ({e})")
+            continue
+        if day.check_complete(position):
+            return
+
+
 def main() -> None:
-    """Entry point: raw_events → parse → DuckLake Bronze."""
+    """Entry point: raw_events → (day bounds) → parse → DuckLake Bronze."""
+    day = EngineDay.from_env()
+    if day is not None:
+        # Before the app joins the group: committing for an empty group is safe
+        day.prepare(lambda offsets: redpanda.commit_offsets(config.QUIX_CONSUMER_GROUP, offsets))
     app = build_app()
     topic = app.topic(config.RAW_EVENTS_TOPIC, value_deserializer="json")
     sdf = app.dataframe(topic)
+    if day is not None:
+        sdf = sdf.filter(in_day(day))
     sdf = sdf.apply(parse_bronze_event).filter(lambda event: event is not None)
-    sdf.sink(DuckLakeBronzeSink())
-    app.run()
+    on_commit = None if day is None else lambda rows: day.record_commit(newest_event_time(rows))
+    sdf.sink(DuckLakeBronzeSink(on_commit=on_commit))
+    stop = threading.Event()
+    if day is not None:
+        threading.Thread(target=watch_completion, args=(day, stop), daemon=True).start()
+    try:
+        app.run()
+    finally:
+        stop.set()
 
 
 if __name__ == "__main__":
