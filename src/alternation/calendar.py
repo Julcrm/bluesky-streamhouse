@@ -99,8 +99,9 @@ class CalendarDay:
 # --- Days and times ---------------------------------------------------------------
 
 
-def branch_for(day: date, start: date = config.ALTERNATION_START_DATE) -> str:
+def branch_for(day: date, start: date | None = None) -> str:
     """Branch of a benchmark day by rotation (D1): B on the start date, then A, B, ..."""
+    start = start or config.ALTERNATION_START_DATE
     if day < start:
         raise CalendarError(f"{day} is before the alternation start date {start}")
     return BRANCH_B if (day - start).days % 2 == 0 else BRANCH_A
@@ -159,12 +160,12 @@ def reached(position: Offsets, end: Offsets) -> bool:
 # --- Store ---------------------------------------------------------------------------
 
 
-def connect_benchmark(dbname: str = config.BENCHMARK_DB):
+def connect_benchmark(dbname: str | None = None):
     """Autocommit session on the benchmark database of the shared Postgres."""
     conn = psycopg2.connect(
         host=config.POSTGRES_HOST,
         port=config.POSTGRES_PORT,
-        dbname=dbname,
+        dbname=dbname or config.BENCHMARK_DB,
         user=config.POSTGRES_USER,
         password=config.POSTGRES_PASSWORD,
         connect_timeout=10,

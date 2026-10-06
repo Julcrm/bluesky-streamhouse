@@ -17,6 +17,12 @@ from dagster import (
 from dagster_dbt import DbtCliResource
 
 from src import config
+from src.dagster.alternation import (
+    branch_calendar,
+    calendar_job,
+    close_day_schedule,
+    open_day_schedule,
+)
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
@@ -90,9 +96,15 @@ def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | 
 
 
 defs = Definitions(
-    assets=[quix_bronze, bluesky_dbt_models, *maintenance_assets],
-    jobs=[silver_gold_job, maintenance_job, nightly_checks_job],
-    schedules=[silver_gold_schedule, maintenance_schedule, nightly_checks_schedule],
+    assets=[quix_bronze, bluesky_dbt_models, *maintenance_assets, branch_calendar],
+    jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job],
+    schedules=[
+        silver_gold_schedule,
+        maintenance_schedule,
+        nightly_checks_schedule,
+        open_day_schedule,
+        close_day_schedule,
+    ],
     sensors=[failure_alert_sensor],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

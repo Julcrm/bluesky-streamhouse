@@ -141,7 +141,7 @@ def test_every_asset_sits_in_the_project_folder() -> None:
     from src.dagster.definitions import defs
 
     graph = defs.get_repository_def().asset_graph
-    layers = {"bronze", "silver", "gold", "maintenance"}
+    layers = {"bronze", "silver", "gold", "maintenance", "alternation"}
     for key in graph.get_all_asset_keys():
         assert key.path[0] == "bluesky" and key.path[1] in layers, key
         assert graph.get(key).group_name == key.path[1], key
