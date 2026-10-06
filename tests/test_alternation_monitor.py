@@ -39,14 +39,19 @@ def test_day_not_closed_15_min_after_19() -> None:
     started = replace(DAY, started_at=OPEN_UTC)
     assert _kinds([started], CLOSE_UTC + timedelta(minutes=14)) == set()
     assert _kinds([started], CLOSE_UTC + timedelta(minutes=15)) == {"not_closed"}
+    assert _kinds([started], CLOSE_UTC + timedelta(minutes=30)) == {"not_closed", "late"}
 
 
-def test_incomplete_and_missed_guard() -> None:
-    incomplete = replace(DAY, status=cal.INCOMPLETE, started_at=OPEN_UTC)
-    assert _kinds([incomplete], CLOSE_UTC) == {"incomplete"}
+def test_late_at_19_30_incomplete_and_missed_stop() -> None:
+    """Late from 19:30 while running; incomplete once stopped at 06:30; an engine still
+    running 15 min after the hard stop means the supervisor did not act."""
     closing = replace(DAY, status=cal.CLOSING, started_at=OPEN_UTC, end_offsets={0: 1})
-    assert _kinds([closing], CLOSE_UTC + timedelta(minutes=44)) == set()
-    assert _kinds([closing], CLOSE_UTC + timedelta(minutes=45)) == {"guard_missed"}
+    assert _kinds([closing], CLOSE_UTC + timedelta(minutes=29)) == set()
+    assert _kinds([closing], CLOSE_UTC + timedelta(minutes=30)) == {"late"}
+    hard_stop = cal.hard_stop_time(DAY.day)
+    assert _kinds([closing], hard_stop + timedelta(minutes=15)) == {"late", "stop_missed"}
+    incomplete = replace(closing, status=cal.INCOMPLETE)
+    assert _kinds([incomplete], hard_stop) == {"incomplete"}
 
 
 def test_no_alert_for_a_branch_not_deployed() -> None:
@@ -56,6 +61,7 @@ def test_no_alert_for_a_branch_not_deployed() -> None:
     assert _kinds([a_day], CLOSE_UTC + timedelta(hours=1), ("A", "B")) == {
         "not_started",
         "not_closed",
+        "late",
     }
 
 

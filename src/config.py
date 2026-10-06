@@ -178,8 +178,12 @@ NIGHTLY_CHECKS_WAIT_SECONDS = 2 * 60 * 60
 ALTERNATION_TIMEZONE = "Europe/Paris"
 ALTERNATION_OPEN_TIME = "07:00"
 ALTERNATION_CLOSE_TIME = "19:00"
-# An engine still running this long after the close is stopped, the day incomplete
-ALTERNATION_GUARD_TIME = "19:30"
+# An engine still running at this time is marked late (alert) and keeps going: no engine
+# runs at night, so it may finish its day. Late days stay in the benchmark, marked
+ALTERNATION_LATE_TIME = "19:30"
+# Hard stop the next morning, before the next opening: an engine still running is
+# stopped and its day is incomplete (messages missing from its Bronze)
+ALTERNATION_HARD_STOP_TIME = "06:30"
 # Branch B runs on this day, then A and B alternate (D1). A benchmark setting: kept here,
 # not in the environment (Coolify freezes a ${VAR:-default} at first deploy)
 ALTERNATION_START_DATE = date(2026, 10, 8)
@@ -202,11 +206,11 @@ TRANSFORM_TAIL_SECONDS = 60 * 60
 # (B runs alone first, D28). Becomes ("A", "B") when branch A is deployed
 DEPLOYED_BRANCHES = ("B",)
 # Calendar alerts (email), each once per day: engine not started this long after the
-# opening, day still open this long after the close (never closed), day still closing
-# this long after the guard time (the supervisor did not act)
+# opening, day still open this long after the close (never closed), day still running
+# this long after the hard stop (the supervisor did not act)
 ALERT_NOT_STARTED_MINUTES = 15
 ALERT_NOT_CLOSED_MINUTES = 15
-ALERT_GUARD_MISSED_MINUTES = 15
+ALERT_STOP_MISSED_MINUTES = 15
 
 # --- Alerts (Resend, as velib) ---
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")

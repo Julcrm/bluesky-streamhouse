@@ -9,8 +9,10 @@ Every SUPERVISOR_POLL_SECONDS it reads the calendar (it never writes a decision)
   ALTERNATION_DAY set (a crashed engine is restarted after a delay);
 - no such day while the engine runs (the engine marked it done, or Dagster changed it):
   stop the engine;
-- still running at the guard time (19:30): stop it, day incomplete (end offsets not
-  reached, or the day was never closed).
+- still running at 19:30: mark the day late and let the engine go on (no engine runs
+  at night, it may finish its day);
+- still running at 06:30 the next morning (hard stop, before the next opening): stop
+  it, day incomplete (end offsets not reached, or the day was never closed).
 
 It never starts an engine without a confirmed row, and keeps the current state when
 Postgres is unreachable. SIGTERM (redeploy, container stop) is passed to the engine,
@@ -111,15 +113,19 @@ class Supervisor:
                 self.process = None
                 return
             # Closing and not done yet, or never closed (the engine waits for its end
-            # offsets): either way the day is over
-            if self._now() >= cal.at(day.day, config.ALTERNATION_GUARD_TIME):
+            # offsets): late at 19:30, over at the hard stop
+            now = self._now()
+            if now >= cal.hard_stop_time(day.day):
                 why = "end offsets not reached" if day.status == cal.CLOSING else "never closed"
-                logger.error(f"Day {day.day}: engine still running at the guard time ({why})")
+                logger.error(f"Day {day.day}: engine still running at the hard stop ({why})")
                 self.stop()
                 self.process = None
                 self._calendar().mark_stopped(
-                    day.day, self._now(), cal.INCOMPLETE, f"stopped by the guard: {why}"
+                    day.day, now, cal.INCOMPLETE, f"stopped at the hard stop: {why}"
                 )
+            elif now >= cal.late_time(day.day) and day.late_at is None:
+                logger.warning(f"Day {day.day}: still running at 19:30, late, going on")
+                self._calendar().mark_late(day.day)
             return
         if day is None or day.stopped_at is not None:
             return

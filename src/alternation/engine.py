@@ -119,7 +119,7 @@ class EngineDay:
     def wait_for_end(self) -> None:
         """Past 19:00 without end offsets: block until Dagster records them. Never
         returns without them; if the close never comes, the supervisor stops the engine
-        at the guard time."""
+        at the hard stop."""
         logger.info(f"Day {self.day}: 19:00 passed, waiting for the end offsets")
         while self.end is None:
             self._sleep(1)

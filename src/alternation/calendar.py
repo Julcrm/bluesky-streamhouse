@@ -16,8 +16,11 @@ Status of a day:
     open      07:00: the engine of its branch may run
     closing   19:00: end offsets known, the engine stops once it has written them all
     done      the engine stopped after its end offsets
-    incomplete stopped by the 19:30 guard, or the day was never closed properly
+    incomplete stopped at the 06:30 hard stop the next morning (messages missing)
     skipped   nobody ran it (branch not deployed yet, e.g. A while B runs alone)
+
+A day whose engine was still running at 19:30 gets `late_at`: it may finish during the
+night (no engine runs then) and stays in the benchmark, marked.
 """
 
 import json
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS branch_calendar (
     started_at      TIMESTAMPTZ,
     caught_up_at    TIMESTAMPTZ,
     stopped_at      TIMESTAMPTZ,
+    late_at         TIMESTAMPTZ,
     note            TEXT
 )
 """
@@ -88,6 +92,7 @@ class CalendarDay:
     started_at: datetime | None = None
     caught_up_at: datetime | None = None
     stopped_at: datetime | None = None
+    late_at: datetime | None = None
     note: str | None = None
 
     @property
@@ -124,6 +129,16 @@ def benchmark_day(now: datetime) -> date:
     if local.time() >= _local_time(config.ALTERNATION_CLOSE_TIME):
         return local.date() + timedelta(days=1)
     return local.date()
+
+
+def late_time(day: date) -> datetime:
+    """19:30 the day: an engine still running is late from then on."""
+    return at(day, config.ALTERNATION_LATE_TIME)
+
+
+def hard_stop_time(day: date) -> datetime:
+    """06:30 the next morning: an engine still running is stopped, the day incomplete."""
+    return at(day + timedelta(days=1), config.ALTERNATION_HARD_STOP_TIME)
 
 
 def day_window(day: date) -> tuple[datetime, datetime]:
@@ -200,6 +215,8 @@ class CalendarStore:
     def ensure_table(self) -> None:
         with self._transaction() as cur:
             cur.execute(DDL)
+            # Tables created before the late mark (2026-10-06)
+            cur.execute("ALTER TABLE branch_calendar ADD COLUMN IF NOT EXISTS late_at TIMESTAMPTZ")
 
     def get(self, day: date) -> CalendarDay | None:
         with self._transaction() as cur:
@@ -343,14 +360,27 @@ class CalendarStore:
             )
             return cur.fetchone() is not None
 
+    def mark_late(self, day: date) -> bool:
+        """Late mark (engine still running at 19:30); False if already marked."""
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE branch_calendar SET late_at = %s "
+                "WHERE day = %s AND late_at IS NULL RETURNING day",
+                (late_time(day), day),
+            )
+            return cur.fetchone() is not None
+
     def mark_stopped(self, day: date, now: datetime, status: str, note: str | None = None) -> None:
-        """Final status of a day, set when its engine stopped (done or incomplete)."""
+        """Final status of a day, set when its engine stopped (done or incomplete). A stop
+        after 19:30 also sets the late mark, whoever noticed it first."""
         if status not in (DONE, INCOMPLETE):
             raise CalendarError(f"Engines end a day as done or incomplete, not {status}")
+        late = late_time(day)
         with self._transaction() as cur:
             cur.execute(
                 "UPDATE branch_calendar SET stopped_at = %s, status = %s, "
+                "late_at = CASE WHEN late_at IS NULL AND %s > %s THEN %s ELSE late_at END, "
                 "note = CASE WHEN %s::text IS NULL THEN note "
                 "ELSE coalesce(note || '; ', '') || %s END WHERE day = %s",
-                (now, status, note, note, day),
+                (now, status, now, late, late, note, note, day),
             )

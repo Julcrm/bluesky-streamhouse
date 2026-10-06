@@ -1,6 +1,7 @@
 """Tests for src.alternation.engine and src.alternation.supervisor."""
 
 import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -96,7 +97,17 @@ def test_done_once_every_partition_reached_its_end(store) -> None:  # noqa: F811
     assert not engine.check_complete({0: 150, 1: 259})
     assert engine.check_complete({0: 151, 1: 260})
     assert store.get(START).status == cal.DONE
+    assert store.get(START).late_at is None
     assert store.active_for("B") is None
+
+
+def test_a_stop_after_19_30_carries_the_late_mark(store) -> None:  # noqa: F811
+    """Done during the night: complete, kept in the benchmark, marked late at 19:30."""
+    _open(store)
+    store.close_day(START, {0: 150, 1: 260}, NOW)
+    store.mark_stopped(START, datetime(2026, 10, 8, 23, 0, tzinfo=UTC), cal.DONE)
+    day = store.get(START)
+    assert (day.status, day.late_at) == (cal.DONE, cal.late_time(START))
 
 
 # --- Supervisor -----------------------------------------------------------------
@@ -108,6 +119,7 @@ class _Calendar:
     def __init__(self, day: cal.CalendarDay | None = None) -> None:
         self.day = day
         self.stopped: list[tuple[date, str]] = []
+        self.late: list[date] = []
         self.unreachable = False
 
     def active_for(self, branch: str) -> cal.CalendarDay | None:
@@ -119,6 +131,10 @@ class _Calendar:
 
     def mark_stopped(self, day: date, now: datetime, status: str, note: str | None = None):
         self.stopped.append((day, status))
+
+    def mark_late(self, day: date) -> bool:
+        self.late.append(day)
+        return True
 
 
 def _day(status: str = cal.OPEN, branch: str = "B") -> cal.CalendarDay:
@@ -175,27 +191,33 @@ def test_stops_when_the_day_is_no_longer_active(supervisor) -> None:
     assert calendar.stopped == []  # the engine recorded its own end
 
 
-def test_guard_stops_a_late_engine_and_marks_the_day(supervisor) -> None:
-    """19:30 Paris (17:30 UTC in October) on a closing day: stopped, incomplete."""
+def test_late_at_19_30_then_hard_stop_at_06_30(supervisor) -> None:
+    """Still running at 19:30 (17:30 UTC in October): marked late, keeps going; still
+    running at 06:30 the next morning (04:30 UTC): stopped, incomplete."""
     sup, calendar, clock = supervisor
     calendar.day = _day()
     sup.tick()
     calendar.day = _day(cal.CLOSING)
-    clock["now"] = datetime(2026, 10, 8, 17, 29, tzinfo=UTC)
+    clock["now"] = datetime(2026, 10, 8, 17, 30, tzinfo=UTC)
     sup.tick()
     assert sup.running()
-    clock["now"] = datetime(2026, 10, 8, 17, 30, tzinfo=UTC)
+    assert calendar.late == [START]
+    calendar.day = replace(calendar.day, late_at=clock["now"])
+    clock["now"] = datetime(2026, 10, 9, 4, 29, tzinfo=UTC)
+    sup.tick()
+    assert sup.running() and calendar.late == [START]
+    clock["now"] = datetime(2026, 10, 9, 4, 30, tzinfo=UTC)
     sup.tick()
     assert not sup.running()
     assert calendar.stopped == [(START, cal.INCOMPLETE)]
 
 
-def test_guard_stops_an_engine_whose_day_was_never_closed(supervisor) -> None:
-    """No close by 19:30 (the engine waits for its end offsets): stopped, incomplete."""
+def test_hard_stop_also_ends_a_day_never_closed(supervisor) -> None:
+    """No close at all (the engine waits for its end offsets): stopped at 06:30."""
     sup, calendar, clock = supervisor
     calendar.day = _day()
     sup.tick()
-    clock["now"] = datetime(2026, 10, 8, 17, 30, tzinfo=UTC)
+    clock["now"] = datetime(2026, 10, 9, 4, 30, tzinfo=UTC)
     sup.tick()
     assert not sup.running()
     assert calendar.stopped == [(START, cal.INCOMPLETE)]

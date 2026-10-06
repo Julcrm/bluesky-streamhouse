@@ -6,8 +6,10 @@ schedule only call these functions.
 Failure alerts only (Julien, 2026-10-06), each sent once per day and kind:
 - not_started: the day is open for a deployed branch, its engine has not started;
 - not_closed: still open after 19:00 (the 19:00 close did not happen);
-- incomplete: stopped by the 19:30 guard, or never properly closed;
-- guard_missed: still closing after the guard time (the supervisor did not act).
+- late: still running at 19:30 (the engine goes on, the day stays in the benchmark,
+  marked);
+- incomplete: stopped at the 06:30 hard stop, messages missing from Bronze;
+- stop_missed: still running after the hard stop (the supervisor did not act).
 A lost message is caught by the completeness check once the day is done.
 """
 
@@ -48,7 +50,7 @@ def alerts(
             continue
         opened = cal.at(day.day, config.ALTERNATION_OPEN_TIME)
         closed = cal.at(day.day, config.ALTERNATION_CLOSE_TIME)
-        guard = cal.at(day.day, config.ALTERNATION_GUARD_TIME)
+        hard_stop = cal.hard_stop_time(day.day)
         if (
             day.status == cal.OPEN
             and day.started_at is None
@@ -68,24 +70,36 @@ def alerts(
                     "The 19:00 close did not run: no end offsets, the engine waits for them.",
                 )
             )
+        if day.status in cal.RUNNING_STATUSES and now >= cal.late_time(day.day):
+            found.append(
+                _alert(
+                    day,
+                    "late",
+                    "day late",
+                    "The engine had not reached the end offsets at 19:30. It goes on until "
+                    "06:30; the day stays in the benchmark, marked late.",
+                )
+            )
         if day.status == cal.INCOMPLETE:
             found.append(
                 _alert(
                     day,
                     "incomplete",
                     "day incomplete",
-                    "The engine did not reach the end offsets; the day is out of the benchmark.",
+                    "The engine was stopped at the 06:30 hard stop before its end offsets: "
+                    "messages of the day are missing from its Bronze.",
                 )
             )
-        if day.status == cal.CLOSING and now >= guard + timedelta(
-            minutes=config.ALERT_GUARD_MISSED_MINUTES
+        if day.status in cal.RUNNING_STATUSES and now >= hard_stop + timedelta(
+            minutes=config.ALERT_STOP_MISSED_MINUTES
         ):
             found.append(
                 _alert(
                     day,
-                    "guard_missed",
-                    "still running after the guard",
-                    "The supervisor did not stop the engine at the guard time.",
+                    "stop_missed",
+                    "still running after the hard stop",
+                    "The supervisor did not stop the engine at 06:30: the next opening is "
+                    "refused while it may still run.",
                 )
             )
     return found

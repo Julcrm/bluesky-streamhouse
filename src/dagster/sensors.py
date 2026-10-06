@@ -2,9 +2,9 @@
 Dagster sensors of branch B, alerts by email (Resend, as velib):
 - a run fails. A failed blocking storage check (80 GB bucket, 2 GB catalog) fails the
   maintenance run, so it alerts the same way (D14, D21);
-- the calendar shows a failed day (D28): engine not started, day not closed, day
-  incomplete, guard not applied. The same sensor launches the completeness check of
-  each finished day of branch B.
+- the calendar shows a failed day (D28): engine not started, day not closed, day late
+  (19:30), incomplete (06:30 hard stop), hard stop not applied. The same sensor
+  launches the completeness check of each finished day of branch B.
 """
 
 import html
