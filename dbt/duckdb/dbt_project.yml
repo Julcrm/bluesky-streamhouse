@@ -11,8 +11,12 @@ test-paths: ["tests"]
 # Silver read positions live outside the models' rows (macros/bronze_changes.sql)
 on-run-start:
   - "{{ create_silver_progress() }}"
+  # Parquet codec of the transform catalog (macros/write_options.sql)
+  - "{{ set_write_options() }}"
 
 vars:
+  # Same codec as Bronze, src.config.DUCKLAKE_PARQUET_COMPRESSION (D14, checked by a test)
+  parquet_compression: zstd
   # Bronze rows read per Silver run (all collections). ~300k posts in one batch overflowed
   # 1 GB; 500k Bronze rows is ~130k posts on a post-heavy mix (~55k on the prod mix)
   silver_max_rows_per_run: 500000

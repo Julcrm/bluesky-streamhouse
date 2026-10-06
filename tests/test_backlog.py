@@ -4,6 +4,7 @@ import json
 
 import duckdb
 import pytest
+import yaml
 
 from src import config
 from src.processing.backlog import (
@@ -44,6 +45,13 @@ def test_caps_come_from_dbt_project() -> None:
     """The caps are dbt vars, not a second copy in Python."""
     assert silver_max_rows_per_run() == 500_000
     assert gold_max_hours_per_run() == 6
+
+
+def test_dbt_writes_the_bronze_codec() -> None:
+    """Silver and Gold use the Parquet codec of Bronze (D14): Snappy slipped into prod."""
+    with open(config.DBT_DUCKDB_PROJECT_DIR / "dbt_project.yml") as f:
+        codec = yaml.safe_load(f)["vars"]["parquet_compression"]
+    assert codec == config.DUCKLAKE_PARQUET_COMPRESSION
 
 
 def test_backlog_progress_is_a_moved_position() -> None:
