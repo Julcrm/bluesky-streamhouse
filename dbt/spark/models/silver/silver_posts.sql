@@ -50,18 +50,19 @@ typed AS (
         get_json_object(record, '$.reply.parent.uri')                   AS reply_parent_uri,
         get_json_object(record, '$.reply.root.uri')                     AS reply_root_uri,
         get_json_object(record, '$.embed.$type')                        AS embed_type,
-        -- NULL tags are dropped, as DuckDB's list_distinct does
+        -- NULL tags are dropped, as DuckDB's list_distinct does; lowercase with Unicode
+        -- simple case mapping, as DuckDB (see macros/simple_lower.sql)
         filter(array_distinct(concat(
             transform(
                 filter(features, f -> f['$type'] = 'app.bsky.richtext.facet#tag'),
-                f -> lower(f['tag'])
+                f -> {{ simple_lower("f['tag']") }}
             ),
             transform(
                 coalesce(
                     from_json(get_json_object(record, '$.tags'), 'array<string>'),
                     CAST(array() AS array<string>)
                 ),
-                t -> lower(t)
+                t -> {{ simple_lower('t') }}
             )
         )), h -> h IS NOT NULL)                                         AS hashtags,
         transform(
