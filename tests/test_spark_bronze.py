@@ -153,3 +153,35 @@ def test_bronze_ddl_matches_the_contract() -> None:
     assert "PARTITIONED BY (days(event_time))" in ddl
     assert "'write.parquet.compression-codec' = 'zstd'," in ddl
     assert "'write.metadata.delete-after-commit.enabled' = 'true'" in ddl
+
+
+# --- Benchmark day (D28) ------------------------------------------------------------
+
+
+def test_before_end_keeps_only_the_days_offsets(spark) -> None:
+    """Exclusive end per partition; a partition missing from the bounds keeps nothing."""
+    from src.processing.spark.stream_job import before_end
+
+    rows = [(0, 9), (0, 10), (1, 19), (1, 20), (2, 0)]
+    frame = spark.createDataFrame(rows, "partition INT, offset BIGINT")
+    kept = frame.where(before_end({0: 10, 1: 20})).collect()
+    assert sorted((r["partition"], r["offset"]) for r in kept) == [(0, 9), (1, 19)]
+
+
+def test_prune_keeps_the_last_day_checkpoints(tmp_path) -> None:
+    from src.processing.spark.stream_job import prune_day_checkpoints
+
+    for name in ("2026-10-07", "2026-10-09", "2026-10-11"):
+        (tmp_path / name).mkdir()
+    assert prune_day_checkpoints(str(tmp_path), keep=2) == ["2026-10-07"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["2026-10-09", "2026-10-11"]
+    assert prune_day_checkpoints(str(tmp_path / "missing"), keep=2) == []
+
+
+def test_committed_position_from_the_progress_json() -> None:
+    """Spark's compact progress JSON, where endOffset is a JSON object."""
+    from src.processing.spark.stream_job import committed_position
+
+    progress = json.dumps({"sources": [{"endOffset": {"raw_events": {"0": 5, "1": 7}}}]})
+    assert committed_position(progress) == {0: 5, 1: 7}
+    assert committed_position(json.dumps({"sources": []})) is None

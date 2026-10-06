@@ -240,6 +240,7 @@ dagster = [
 dbt-spark = [
     { name = "dbt-core" },
     { name = "dbt-spark", extra = ["session"] },
+    { name = "psycopg2-binary" },
     { name = "pyspark" },
 ]
 dev = [
@@ -259,6 +260,7 @@ quix = [
     { name = "quixstreams" },
 ]
 spark = [
+    { name = "psycopg2-binary" },
     { name = "pyspark" },
 ]
 
@@ -289,6 +291,7 @@ dagster = [
 dbt-spark = [
     { name = "dbt-core", specifier = ">=1.12,<1.13" },
     { name = "dbt-spark", extras = ["session"], specifier = ">=1.11,<1.12" },
+    { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pyspark", specifier = "==4.1.3" },
 ]
 dev = [
@@ -307,7 +310,10 @@ quix = [
     { name = "pyarrow", specifier = ">=20" },
     { name = "quixstreams", specifier = ">=3.26,<4" },
 ]
-spark = [{ name = "pyspark", specifier = "==4.1.3" }]
+spark = [
+    { name = "psycopg2-binary", specifier = ">=2.9" },
+    { name = "pyspark", specifier = "==4.1.3" },
+]
 
 [[package]]
 name = "botocore"

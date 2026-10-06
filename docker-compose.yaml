@@ -181,13 +181,19 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # Benchmark calendar (database bluesky_benchmark, D28), read by the supervisor
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       # JVM sized for the 1 GB limit (tuning checklist): Spark's minimum heap is 450 MB,
       # ~250 MB more for classes, JIT and threads; fail fast on OOM instead of hanging
       - SPARK_DRIVER_MEMORY=480m
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
-    # Kafka offsets and batch ids: losing this volume means reading raw_events again
-    # from the oldest retained offset (duplicates in Bronze, removed in Silver)
+    # One checkpoint per benchmark day (Kafka offsets, batch ids): losing it during a
+    # day restarts that day from its start offsets (duplicates in Bronze, removed in
+    # Silver)
     volumes:
       - spark-checkpoint:/app/state
     stop_grace_period: 30s

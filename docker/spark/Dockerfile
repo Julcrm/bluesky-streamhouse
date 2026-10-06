@@ -49,8 +49,10 @@ SparkSession.builder.master('local[1]') \
 COPY src ./src
 
 RUN adduser --disabled-password --gecos '' appuser \
-    && mkdir -p /app/state/spark-checkpoint && chown -R appuser /app/state
+    && mkdir -p /app/state/spark-checkpoint/days && chown -R appuser /app/state
 USER appuser
 
-# Exec form: Python is PID 1 and receives SIGTERM, which stops the query cleanly
-CMD [".venv/bin/python", "-m", "src.processing.spark.stream_job"]
+# The supervisor (decision D28) is PID 1: it runs the job only on branch A's days and
+# passes SIGTERM to it, which stops the query cleanly. Exec form, no shell in between
+CMD [".venv/bin/python", "-m", "src.alternation.supervisor", "A", "--", \
+     ".venv/bin/python", "-m", "src.processing.spark.stream_job"]
