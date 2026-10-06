@@ -105,8 +105,9 @@ DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
 DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 
 # --- Dagster, branch B (decision D20) ---
-# Code location name in the dagster-workspace workspace.yaml
-DAGSTER_CODE_LOCATION = "bluesky_duckdb"
+# Code location name in the dagster-workspace workspace.yaml: bluesky_duckdb (branch B)
+# or bluesky_spark (branch A), set by each code server container
+DAGSTER_CODE_LOCATION = os.getenv("DAGSTER_CODE_LOCATION", "bluesky_duckdb")
 # Every asset key starts with it: one folder per project in the shared Dagster catalog
 # (velib-lakehouse uses `velib`), then one per layer (bronze, silver, gold, maintenance)
 DAGSTER_ASSET_PREFIX = "bluesky"
@@ -258,6 +259,19 @@ SPARK_PACKAGES = (
     f"org.apache.iceberg:iceberg-aws-bundle:{ICEBERG_VERSION}",
     f"org.apache.spark:spark-sql-kafka-0-10_2.13:{SPARK_VERSION}",
 )
+
+# --- Iceberg maintenance, branch A (decision D21 for B, same contract) ---
+# Nightly, 30 min after branch B's so the two never compete for the VPS
+ICEBERG_MAINTENANCE_CRON = "30 2 * * *"
+# Time travel kept: 24 h, as DuckLake (D21). With a commit every 5 s, ~17 000 snapshots
+# stay listed in every metadata.json: their cost is measured, not avoided (H8)
+ICEBERG_SNAPSHOT_RETENTION_HOURS = 24
+# Iceberg refuses to remove orphans younger than 24 h (a running write may own them)
+ICEBERG_ORPHAN_MIN_AGE_HOURS = 25
+# Same target as DuckLake's CHECKPOINT (DUCKLAKE_TARGET_FILE_SIZE)
+ICEBERG_TARGET_FILE_SIZE_BYTES = 512 * 1024 * 1024
+# The maintenance JVM runs alone in the code server (1.5 GB, like branch B's)
+SPARK_MAINTENANCE_DRIVER_MEMORY = os.getenv("SPARK_MAINTENANCE_DRIVER_MEMORY", "900m")
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

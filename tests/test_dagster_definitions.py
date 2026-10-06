@@ -184,3 +184,28 @@ def test_reaper_closes_unfinished_runs_of_this_location_only() -> None:
         assert status[canceling.run_id] == DagsterRunStatus.CANCELED
         assert instance.get_run_by_id(other.run_id).status == DagsterRunStatus.STARTED
         assert instance.get_run_by_id(done.run_id).status == DagsterRunStatus.SUCCESS
+
+
+def test_spark_code_location_loads_without_branch_b() -> None:
+    """Branch A's code location: Iceberg maintenance under bluesky/maintenance, its own
+    schedule and alert sensor, and no import of branch B's dbt project."""
+    from src.dagster.spark_definitions import defs, iceberg_maintenance_job
+
+    job = defs.get_job_def(iceberg_maintenance_job.name)
+    keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
+    assert keys == {"bluesky/maintenance/iceberg_bronze_maintenance"}
+    assert defs.get_sensor_def("spark_failure_alert_sensor") is not None
+    assert defs.get_schedule_def("iceberg_maintenance_schedule") is not None
+    # In a fresh interpreter: loading branch A must not load branch B's modules
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, src.dagster.spark_definitions; "
+            "print([m for m in sys.modules if m in ('src.dagster.assets', 'dagster_dbt')])",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert loaded == "[]"

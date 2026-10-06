@@ -20,7 +20,6 @@ Usage: python -m src.processing.spark.stream_job (without ALTERNATION_DAY: no bo
 one checkpoint, from the oldest retained offset; local development)
 """
 
-import glob
 import json
 import logging
 import os
@@ -39,10 +38,13 @@ from src import config
 from src.alternation import calendar as cal
 from src.alternation.engine import EngineDay
 from src.processing.bronze import BRONZE_COLUMNS, BRONZE_TABLE
+from src.resources.spark import build_session
 
 logger = logging.getLogger(__name__)
 
 BRONZE_IDENTIFIER = f"{config.SPARK_CATALOG}.{config.ICEBERG_BRONZE_NAMESPACE}.{BRONZE_TABLE}"
+
+__all__ = ["BRONZE_IDENTIFIER", "bronze_ddl", "build_session", "main", "parse_raw_events"]
 
 # Jetstream v2 commit envelope, as the producer writes it to raw_events. `record` is
 # not typed here: it is kept as raw JSON, like branch B
@@ -121,39 +123,6 @@ def bronze_ddl(identifier: str = BRONZE_IDENTIFIER) -> str:
         "    'write.metadata.previous-versions-max' = '100'\n"
         ")"
     )
-
-
-def build_session(app_name: str = "bluesky-bronze") -> SparkSession:
-    """Local-mode session (single node) with the Lakekeeper REST catalog."""
-    catalog = f"spark.sql.catalog.{config.SPARK_CATALOG}"
-    builder = (
-        SparkSession.builder.appName(app_name)
-        .master("local[*]")
-        .config("spark.driver.memory", config.SPARK_DRIVER_MEMORY)
-        .config("spark.driver.extraJavaOptions", config.SPARK_DRIVER_JAVA_OPTIONS)
-        # Timestamps are UTC end to end, like branch B's DuckDB sessions
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", config.SPARK_SHUFFLE_PARTITIONS)
-        .config("spark.sql.adaptive.enabled", "true")
-        .config(
-            "spark.sql.extensions",
-            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-        )
-        .config(catalog, "org.apache.iceberg.spark.SparkCatalog")
-        .config(f"{catalog}.type", "rest")
-        .config(f"{catalog}.uri", config.ICEBERG_CATALOG_URI)
-        .config(f"{catalog}.warehouse", config.ICEBERG_WAREHOUSE)
-        # Ask Lakekeeper to sign S3 requests rather than hand out credentials
-        .config(f"{catalog}.header.X-Iceberg-Access-Delegation", "remote-signing")
-        .config("spark.ui.enabled", "false")
-    )
-    jars_dir = os.getenv("SPARK_JARS_DIR")
-    if jars_dir:  # image: jars resolved at build time into this directory, never at runtime
-        jars = sorted(glob.glob(os.path.join(jars_dir, "*.jar")))
-        builder = builder.config("spark.jars", ",".join(jars))
-    else:  # local run: Spark resolves the pinned packages
-        builder = builder.config("spark.jars.packages", ",".join(config.SPARK_PACKAGES))
-    return builder.getOrCreate()
 
 
 def read_raw_events(spark: SparkSession, starting_offsets: str = "earliest") -> DataFrame:
@@ -288,7 +257,7 @@ def main() -> None:
         if removed:
             logger.info(f"Old day checkpoints removed: {removed}")
     checkpoint = day_checkpoint(day)
-    spark = build_session()
+    spark = build_session("bluesky-bronze")
     spark.sparkContext.setLogLevel("WARN")
     spark.sql(
         f"CREATE NAMESPACE IF NOT EXISTS {config.SPARK_CATALOG}.{config.ICEBERG_BRONZE_NAMESPACE}"

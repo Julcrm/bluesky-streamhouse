@@ -9,6 +9,8 @@
 #   - lakekeeper (+ one-shot lakekeeper-migrate, lakekeeper-init): Iceberg REST
 #     catalog of branch A, database iceberg_catalog on the shared Postgres
 #   - spark: branch A, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
+#   - bluesky-spark: branch A Dagster gRPC code server (Iceberg maintenance; phase 5:
+#     dbt-spark), port 4000 on the coolify network only
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
 # Services of later phases (Spark, API) are added here.
@@ -201,6 +203,36 @@ services:
       resources:
         limits:
           memory: 1G
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+    networks:
+      - coolify
+    restart: always
+
+  # Branch A Dagster code location `bluesky_spark` (D20): same 1.5 GB as branch B's.
+  # Runs execute here, Spark in local mode (maintenance JVM: 900 MB heap)
+  bluesky-spark:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    expose:
+      - "4000"
+    environment:
+      - DAGSTER_POSTGRES_USER=${DAGSTER_POSTGRES_USER}
+      - DAGSTER_POSTGRES_PASSWORD=${DAGSTER_POSTGRES_PASSWORD}
+      - DAGSTER_POSTGRES_HOST=${DAGSTER_POSTGRES_HOST}
+      - DAGSTER_POSTGRES_DB=${DAGSTER_POSTGRES_DB}
+      - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
+      - MALLOC_ARENA_MAX=2
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - ALERT_EMAIL=${ALERT_EMAIL}
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully

@@ -1,5 +1,5 @@
 """
-Dagster sensors of branch B, alerts by email (Resend, as velib):
+Dagster sensors of branch B, alerts by email (Resend, as velib, src/dagster/alerts.py):
 - a run fails. A failed blocking storage check (80 GB bucket, 2 GB catalog) fails the
   maintenance run, so it alerts the same way (D14, D21);
 - the calendar shows a failed day (D28): engine not started, day not closed, day late
@@ -11,71 +11,29 @@ import html
 import json
 from datetime import UTC, datetime
 
-import requests
 from dagster import (
     DefaultSensorStatus,
-    RunFailureSensorContext,
     RunRequest,
     SensorEvaluationContext,
     SkipReason,
-    run_failure_sensor,
     sensor,
 )
 
-from src import config
 from src.alternation import calendar as cal
 from src.alternation import monitor
+from src.dagster.alerts import failure_alert_sensor as _failure_alert_sensor
+from src.dagster.alerts import send_email, send_failure_email
 from src.dagster.alternation import calendar_job, completeness_job, completeness_request
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 
+__all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_failure_email"]
 
-def send_email(subject: str, body_html: str) -> bool:
-    """Send an alert through the Resend API; False when alerts are not configured."""
-    if not config.RESEND_API_KEY or not config.ALERT_EMAIL:
-        return False
-    response = requests.post(
-        "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {config.RESEND_API_KEY}"},
-        json={
-            "from": config.ALERT_FROM,
-            "to": [config.ALERT_EMAIL],
-            "subject": f"Bluesky Streamhouse - {subject}",
-            "html": body_html,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    return True
-
-
-def send_failure_email(run_id: str, job_name: str, error: str) -> bool:
-    """Alert for a failed run; False when alerts are not configured."""
-    return send_email(
-        f"{job_name} failed",
-        "<h2>Pipeline failure detected</h2>"
-        f"<p><strong>Job:</strong> {html.escape(job_name)}</p>"
-        f"<p><strong>Run ID:</strong> {html.escape(run_id)}</p>"
-        f"<pre>{html.escape(error)}</pre>",
-    )
-
-
-@run_failure_sensor(
-    monitored_jobs=[
-        silver_gold_job,
-        maintenance_job,
-        nightly_checks_job,
-        calendar_job,
-        completeness_job,
-    ],
-    default_status=DefaultSensorStatus.RUNNING,
+# Every failed run of branch B's jobs, the calendar's (a refused opening: an engine may
+# still be running) and the completeness check's
+failure_alert_sensor = _failure_alert_sensor(
+    "failure_alert_sensor",
+    [silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
 )
-def failure_alert_sensor(context: RunFailureSensorContext) -> None:
-    """Email on any failed run of the Silver/Gold, maintenance, nightly checks, calendar
-    (a refused opening: an engine may still be running) or completeness job."""
-    error = context.failure_event.message if context.failure_event else "Unknown error"
-    if not send_failure_email(context.dagster_run.run_id, context.dagster_run.job_name, error):
-        context.log.warning("RESEND_API_KEY or ALERT_EMAIL missing: failure alert not sent")
-
 
 # Alert keys remembered in the cursor (a few days of alerts)
 SENT_ALERTS_KEPT = 50

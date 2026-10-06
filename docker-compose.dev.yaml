@@ -9,6 +9,7 @@
 #   - lakekeeper:       Iceberg REST catalog of branch A (localhost:8181), with its
 #                       one-shot migrate and init (bootstrap + warehouse on Garage)
 #   - spark:            branch A streaming job (profile `spark`: make spark)
+#   - iceberg-maintenance: branch A Iceberg maintenance, once (make iceberg-maintenance)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
 # Credentials come from .env (created from .env.example by `make up`), local only.
@@ -169,6 +170,30 @@ services:
         condition: service_completed_successfully
       redpanda:
         condition: service_healthy
+
+  # Branch A Iceberg maintenance, run once on demand (make iceberg-maintenance), with
+  # the image of the bluesky_spark code location; run history in the local Dagster db
+  iceberg-maintenance:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    profiles: ["spark"]
+    command: ["dagster", "job", "execute", "-m", "src.dagster.spark_definitions", "-j", "bluesky_iceberg_maintenance"]
+    environment:
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      DAGSTER_POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
+      DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
+      DAGSTER_POSTGRES_HOST: postgres
+      DAGSTER_POSTGRES_DB: dagster
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
 
 configs:
   garage_toml:
