@@ -269,9 +269,9 @@ services:
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      # Heap; ~600 MB more off-heap whatever the heap (classes of Hive, Thrift, Iceberg:
-      # metaspace 230 MB measured on 2026-10-07, capped at 320)
-      - SPARK_THRIFT_DRIVER_MEMORY=1g
+      # Heap 768 MB (D31, measured 2026-10-07: 7 passes of 500 000 rows + dbt build, peak
+      # 1.37 GiB); ~600 MB more off-heap whatever the heap. A 1 GB heap was OOM-killed
+      - SPARK_THRIFT_DRIVER_MEMORY=768m
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
     stop_grace_period: 30s

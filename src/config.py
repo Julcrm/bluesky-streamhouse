@@ -282,9 +282,10 @@ SPARK_THRIFT_PORT = 10000
 # Two cores, as branch B's dbt runs DuckDB with 2 threads (same transform budget). With
 # local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
 SPARK_THRIFT_CORES = 2
-# Heap of the server JVM; the rest of the container's limit is off-heap (D31: ~600 MB of
-# metaspace, code cache and native memory measured, whatever the heap)
-SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "1g")
+# Heap of the server JVM; the rest of the 1.5 GB container is off-heap (~600 MB of
+# metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
+# 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
+SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

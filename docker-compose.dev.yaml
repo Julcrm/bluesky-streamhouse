@@ -216,7 +216,7 @@ services:
     command: [".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
     environment:
       ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
-      SPARK_THRIFT_DRIVER_MEMORY: 1g
+      SPARK_THRIFT_DRIVER_MEMORY: 768m
       SPARK_DRIVER_JAVA_OPTIONS: >-
         -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
         -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
