@@ -8,7 +8,7 @@ sources:
       - name: bronze_events
         meta:
           dagster:
-            asset_key: ["bluesky", "bronze", "spark_bronze"]
+            asset_key: ["bluesky", "spark", "bronze", "spark_bronze"]
         description: >
           One row per Jetstream commit event, append-only (Iceberg). Duplicates from
           producer resumes are expected and removed in Silver on `seq`.

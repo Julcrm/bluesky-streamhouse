@@ -185,6 +185,7 @@ services:
     command: ["dagster", "job", "execute", "-m", "src.dagster.spark_definitions", "-j", "bluesky_iceberg_maintenance"]
     environment:
       ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_THRIFT_HOST: spark-thrift
       DAGSTER_POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
       DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
       DAGSTER_POSTGRES_HOST: postgres

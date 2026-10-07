@@ -90,6 +90,7 @@ dbt-build: check_uv
 
 dbt-parse: check_uv
 	cd dbt/duckdb && uv run dbt parse --profiles-dir .
+	cd dbt/spark && uv run dbt parse --profiles-dir .
 
 # Dagster UI on localhost:3000 with the branch B code location (local stack, .env)
 dagster: check_uv

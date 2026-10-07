@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
-import yaml
 
 from src import config
 from src.processing.bronze import BRONZE_TABLE
@@ -45,22 +44,6 @@ class Backlog:
             new is not None and (old is None or new > old)
             for new, old in zip(self.positions, previous.positions, strict=True)
         )
-
-
-def dbt_var(name: str, project_dir: Path = config.DBT_DUCKDB_PROJECT_DIR) -> int:
-    """Integer var of dbt_project.yml (single source of truth for the caps)."""
-    with open(project_dir / "dbt_project.yml") as f:
-        return int(yaml.safe_load(f)["vars"][name])
-
-
-def silver_max_rows_per_run(project_dir: Path = config.DBT_DUCKDB_PROJECT_DIR) -> int:
-    """Bronze rows one Silver run reads at most."""
-    return dbt_var("silver_max_rows_per_run", project_dir)
-
-
-def gold_max_hours_per_run(project_dir: Path = config.DBT_DUCKDB_PROJECT_DIR) -> int:
-    """Hours one Gold model rebuilds per run at most."""
-    return dbt_var("gold_max_hours_per_run", project_dir)
 
 
 def gold_inputs(manifest_path: Path) -> dict[str, list[str]]:

@@ -99,3 +99,21 @@ def test_completeness_query_counts_distinct_offsets_in_bounds() -> None:
     assert missing_offsets(day, found) == {0: 0, 1: 1, 2: 1}
     metadata = completeness_metadata(day, missing_offsets(day, found))
     assert (metadata["messages"], metadata["missing"]) == (7, 2)
+
+
+def test_nightly_checks_only_the_night_after_a_day_of_the_branch() -> None:
+    """03:00 on 10/09 (01:00 UTC): the day that ended at 19:00 on 10/08 decides (D30)."""
+    night = datetime(2026, 10, 9, 1, 0, tzinfo=UTC)
+    done = replace(DAY, status=cal.DONE, stopped_at=CLOSE_UTC)
+    assert monitor.nightly_checks_due([done], "B", night) is not None
+    assert monitor.nightly_checks_due([done], "A", night) is None
+    # The night after, nothing of B in the window
+    assert monitor.nightly_checks_due([done], "B", night + timedelta(days=1)) is None
+    # Late and still finishing: tested; closing on time but not done yet: not
+    closing = replace(DAY, status=cal.CLOSING)
+    assert monitor.nightly_checks_due([closing], "B", night) is None
+    late = replace(closing, late_at=CLOSE_UTC + timedelta(minutes=30))
+    assert monitor.nightly_checks_due([late], "B", night) is not None
+    # A skipped day of A (not deployed): no test for A
+    skipped = replace(DAY, branch="A", status=cal.SKIPPED)
+    assert monitor.nightly_checks_due([skipped], "A", night) is None

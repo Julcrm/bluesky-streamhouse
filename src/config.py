@@ -109,10 +109,15 @@ DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 # or bluesky_spark (branch A), set by each code server container
 DAGSTER_CODE_LOCATION = os.getenv("DAGSTER_CODE_LOCATION", "bluesky_duckdb")
 # Every asset key starts with it: one folder per project in the shared Dagster catalog
-# (velib-lakehouse uses `velib`), then one per layer (bronze, silver, gold, maintenance)
+# (velib-lakehouse uses `velib`), then one per engine, then one per layer (bronze,
+# silver, gold, maintenance, alternation). Engine folders (D30): both branches have
+# the same model names (contract), and two code locations cannot declare the same key
 DAGSTER_ASSET_PREFIX = "bluesky"
-# dbt project of branch B, found from this file (no absolute path, unlike velib)
+DAGSTER_ENGINE_B = "quix"
+DAGSTER_ENGINE_A = "spark"
+# dbt projects, found from this file (no absolute path, unlike velib)
 DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
+DBT_SPARK_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "spark"
 # Silver -> Gold every 15 min, same freshness contract as branch A
 DAGSTER_SCHEDULE_CRON = "*/15 * * * *"
 DAGSTER_TIMEZONE = "Europe/Paris"
@@ -286,6 +291,9 @@ SPARK_THRIFT_CORES = 2
 # metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
 # 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
 SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
+# One run at a time in branch A's location (D30): maintenance and completeness wait for
+# the other runs (a 07:00 Silver/Gold catch-up included) up to this long
+SPARK_RUN_WAIT_SECONDS = 2 * 60 * 60
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

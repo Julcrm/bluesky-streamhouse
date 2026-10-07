@@ -1,8 +1,9 @@
 # =============================================================================
 # Dagster gRPC code server `bluesky_spark` — Bluesky Streamhouse, branch A
-# Serves branch A's assets to the shared dagster-workspace on port 4000 (phase 4: Iceberg
-# maintenance; phase 5: dbt-spark Silver/Gold). Runs execute here (DefaultRunLauncher):
-# Spark in local mode, its memory counts against this container's limit (D20).
+# Serves branch A's assets to the shared dagster-workspace on port 4000: dbt-spark
+# Silver/Gold (queries run in the spark-thrift container, same image), Iceberg
+# maintenance. Runs execute here (DefaultRunLauncher), their memory counts against this
+# container's limit (D20).
 # Runtime: Python 3.12-slim, Java 21, PySpark 4.1.3, dagster, Iceberg jars (build time)
 # =============================================================================
 
@@ -46,11 +47,16 @@ SparkSession.builder.master('local[1]') \
        done; ls $SPARK_JARS_DIR
 
 COPY src ./src
+COPY dbt/spark ./dbt/spark
 COPY docker/dagster/dagster.yaml /opt/dagster/dagster_home/dagster.yaml
 
+# dbt writes target/ and logs/ in the project at every run
 RUN adduser --disabled-password --gecos '' appuser \
-    && mkdir -p /tmp/spark && chown -R appuser /opt/dagster /tmp/spark
+    && mkdir -p /tmp/spark && chown -R appuser /opt/dagster /tmp/spark /app/dbt/spark
 USER appuser
+
+# Manifest compiled at build (no Thrift server needed): the assets load it at startup
+RUN .venv/bin/dbt parse --project-dir dbt/spark --profiles-dir dbt/spark
 
 EXPOSE 4000
 

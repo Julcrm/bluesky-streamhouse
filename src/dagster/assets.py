@@ -6,18 +6,15 @@ Assets contain no business logic: they delegate to dbt and to the processing mod
 - dbt models: one asset per Silver and Gold model, dbt tests as asset checks. The
   project and its manifest are found from `src.config`, never an absolute path.
 
-Keys are `bluesky/<layer>/<name>` and groups are the layers: the Dagster catalog is
-shared with velib, each project keeps its own folder.
+Keys are `bluesky/quix/<layer>/<name>` and groups are the layers: the Dagster catalog is
+shared with velib, each project keeps its own folder, each engine its own (D30).
 """
 
 import json
-import subprocess
-from collections.abc import Iterator, Mapping
-from typing import Any
+from collections.abc import Iterator
 
 from dagster import (
     AssetExecutionContext,
-    AssetKey,
     DataVersion,
     Failure,
     ObserveResult,
@@ -25,17 +22,17 @@ from dagster import (
     RetryPolicy,
     observable_source_asset,
 )
-from dagster_dbt import DagsterDbtTranslator, DbtCliResource, DbtProject, dbt_assets
+from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
 
 from src import config
+from src.dagster.dbt_common import BlueskyDbtTranslator, is_silver, silver_selected, stop_process
 from src.dagster.runs import wait_for_runs
-from src.processing.backlog import (
-    Backlog,
-    current_backlog,
-    gold_max_hours_per_run,
-    silver_max_rows_per_run,
-)
+from src.processing.backlog import Backlog, current_backlog
+from src.processing.dbt_vars import gold_max_hours_per_run, silver_max_rows_per_run
 from src.resources.ducklake import connect
+
+# bluesky/quix/<layer>/<name> (D30)
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B]
 
 dbt_project = DbtProject(
     project_dir=config.DBT_DUCKDB_PROJECT_DIR,
@@ -47,7 +44,7 @@ dbt_project.prepare_if_dev()
 
 @observable_source_asset(
     name="quix_bronze",
-    key_prefix=[config.DAGSTER_ASSET_PREFIX, "bronze"],
+    key_prefix=[*KEY_PREFIX, "bronze"],
     group_name="bronze",
     description="DuckLake Bronze table written by the Quix Streams sink (catalog `bronze`).",
 )
@@ -68,49 +65,12 @@ def quix_bronze() -> ObserveResult:
     )
 
 
-def _stop(process: subprocess.Popen, timeout: float = 30) -> None:
-    """Terminate a dbt subprocess that is still running, then kill it if it hangs."""
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def _is_silver(key: AssetKey) -> bool:
-    """Silver models are named silver_* (their asset key ends with the model name)."""
-    return key.path[-1].startswith("silver_")
-
-
-def _silver_selected(context: AssetExecutionContext) -> bool:
-    """True when the run materializes at least one Silver model."""
-    return any(_is_silver(key) for key in context.selected_asset_keys)
-
-
-class BlueskyDbtTranslator(DagsterDbtTranslator):
-    """dbt models as `bluesky/<layer>/<model>` in the group of their layer (silver, gold).
-
-    The Bronze source keeps the key set in its dbt meta (the `quix_bronze` asset).
-    """
-
-    def get_asset_key(self, dbt_resource_props: Mapping[str, Any]) -> AssetKey:
-        key = super().get_asset_key(dbt_resource_props)
-        if dbt_resource_props["resource_type"] != "model":
-            return key
-        return key.with_prefix(config.DAGSTER_ASSET_PREFIX)
-
-    def get_group_name(self, dbt_resource_props: Mapping[str, Any]) -> str | None:
-        if dbt_resource_props["resource_type"] != "model":
-            return super().get_group_name(dbt_resource_props)
-        # fqn = [project, layer folder, ..., model]
-        return dbt_resource_props["fqn"][1]
-
-
 @dbt_assets(
     manifest=dbt_project.manifest_path,
     project=dbt_project,
-    dagster_dbt_translator=BlueskyDbtTranslator(),
+    dagster_dbt_translator=BlueskyDbtTranslator(
+        [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B]
+    ),
     retry_policy=RetryPolicy(
         max_retries=config.DAGSTER_RETRY_MAX, delay=config.DAGSTER_RETRY_DELAY_SECONDS
     ),
@@ -135,11 +95,11 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
         try:
             yield from invocation.stream()
         finally:
-            _stop(invocation.process)
+            stop_process(invocation.process)
         return
 
     passes = 0
-    if _silver_selected(context):
+    if silver_selected(context):
         silver_cap, gold_cap = silver_max_rows_per_run(), gold_max_hours_per_run()
 
         def measure() -> Backlog:
@@ -181,7 +141,7 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
     try:
         for event in invocation.stream():
             # Benchmark metadata: how many extra passes this run needed
-            if isinstance(event, Output) and _is_silver(
+            if isinstance(event, Output) and is_silver(
                 context.asset_key_for_output(event.output_name)
             ):
                 event = event.with_metadata({**event.metadata, "catchup_passes": passes})
@@ -189,4 +149,4 @@ def bluesky_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> I
     finally:
         # If the op fails mid-stream, dbt would keep writing and hold the DuckDB file
         # lock while the retry starts a second dbt over the same tables
-        _stop(invocation.process)
+        stop_process(invocation.process)

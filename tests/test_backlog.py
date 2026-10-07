@@ -12,11 +12,10 @@ from src.processing.backlog import (
     bronze_rows_after,
     gold_hours_behind,
     gold_inputs,
-    gold_max_hours_per_run,
     gold_positions,
-    silver_max_rows_per_run,
     silver_read_snapshot,
 )
+from src.processing.dbt_vars import gold_max_hours_per_run, silver_max_rows_per_run
 
 
 @pytest.fixture
@@ -45,6 +44,9 @@ def test_caps_come_from_dbt_project() -> None:
     """The caps are dbt vars, not a second copy in Python."""
     assert silver_max_rows_per_run() == 500_000
     assert gold_max_hours_per_run() == 6
+    # Same caps in branch A's project (contract)
+    assert silver_max_rows_per_run(config.DBT_SPARK_PROJECT_DIR) == 500_000
+    assert gold_max_hours_per_run(config.DBT_SPARK_PROJECT_DIR) == 6
 
 
 def test_dbt_writes_the_bronze_codec() -> None:

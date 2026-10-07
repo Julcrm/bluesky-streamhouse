@@ -11,7 +11,7 @@ sources:
         # (prefix config.DAGSTER_ASSET_PREFIX, layer folder `bronze`)
         meta:
           dagster:
-            asset_key: ["bluesky", "bronze", "quix_bronze"]
+            asset_key: ["bluesky", "quix", "bronze", "quix_bronze"]
         description: >
           One row per Jetstream commit event, append-only. Duplicates from producer
           resumes or consumer replays are expected and removed in Silver on `seq`.
