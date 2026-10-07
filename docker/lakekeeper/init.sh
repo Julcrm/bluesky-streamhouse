@@ -1,7 +1,8 @@
 #!/bin/sh
 # =============================================================================
 # Lakekeeper first-start setup, idempotent (run by a one-shot curl container):
-# bootstrap the server, then create the Iceberg warehouse on Garage if missing.
+# bootstrap the server, create the Iceberg warehouse on Garage if missing, then the
+# `default` namespace (dbt-spark's PyHive runs `USE default` on every connection).
 # Storage: S3-compatible, path-style, no STS (Garage has none), remote signing on:
 # Lakekeeper signs its clients' S3 requests, Spark holds no S3 key.
 # Env: LAKEKEEPER_URL, ICEBERG_WAREHOUSE, BUCKET, ICEBERG_KEY_PREFIX, S3_ENDPOINT_URL,
@@ -17,13 +18,9 @@ case "$code" in
   *) echo "Bootstrap failed: HTTP $code $(cat /tmp/out)"; exit 1 ;;
 esac
 
-if curl -sf "$LAKEKEEPER_URL/management/v1/warehouse" | grep -q "\"name\":\"$ICEBERG_WAREHOUSE\""; then
-  echo "Warehouse $ICEBERG_WAREHOUSE already exists"
-  exit 0
-fi
-
-code=$(curl -s -o /tmp/out -w "%{http_code}" -X POST "$LAKEKEEPER_URL/management/v1/warehouse" \
-  -H "Content-Type: application/json" -d @- <<JSON
+create_warehouse() {
+  code=$(curl -s -o /tmp/out -w "%{http_code}" -X POST "$LAKEKEEPER_URL/management/v1/warehouse" \
+    -H "Content-Type: application/json" -d @- <<JSON
 {
   "warehouse-name": "$ICEBERG_WAREHOUSE",
   "storage-profile": {
@@ -39,6 +36,26 @@ code=$(curl -s -o /tmp/out -w "%{http_code}" -X POST "$LAKEKEEPER_URL/management
 }
 JSON
 )
-# 201: created (Lakekeeper has written and read a test object on the bucket)
-[ "$code" = "201" ] || { echo "Warehouse creation failed: HTTP $code $(cat /tmp/out)"; exit 1; }
-echo "Warehouse $ICEBERG_WAREHOUSE created"
+  # 201: created (Lakekeeper has written and read a test object on the bucket)
+  [ "$code" = "201" ] || { echo "Warehouse creation failed: HTTP $code $(cat /tmp/out)"; exit 1; }
+  echo "Warehouse $ICEBERG_WAREHOUSE created"
+}
+
+if curl -sf "$LAKEKEEPER_URL/management/v1/warehouse" | grep -q "\"name\":\"$ICEBERG_WAREHOUSE\""; then
+  echo "Warehouse $ICEBERG_WAREHOUSE already exists"
+else
+  create_warehouse
+fi
+
+# Iceberg REST prefix of the warehouse (its id), from the catalog config
+prefix=$(curl -sf "$LAKEKEEPER_URL/catalog/v1/config?warehouse=$ICEBERG_WAREHOUSE" \
+  | sed -n 's/.*"prefix":"\([^"]*\)".*/\1/p')
+[ -n "$prefix" ] || { echo "No catalog prefix for warehouse $ICEBERG_WAREHOUSE"; exit 1; }
+code=$(curl -s -o /tmp/out -w "%{http_code}" -X POST \
+  "$LAKEKEEPER_URL/catalog/v1/$prefix/namespaces" \
+  -H "Content-Type: application/json" -d '{"namespace": ["default"]}')
+case "$code" in
+  200) echo "Namespace default created" ;;
+  409) echo "Namespace default already exists" ;;
+  *) echo "Namespace default creation failed: HTTP $code $(cat /tmp/out)"; exit 1 ;;
+esac

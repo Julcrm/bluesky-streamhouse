@@ -244,6 +244,17 @@ class CalendarStore:
         days = [d for d in self.running_days() if d.effective_branch == branch]
         return days[0] if days else None
 
+    def owner(self) -> str | None:
+        """Branch of the latest opened day: it owns the VPS until the next opening, night
+        included (supervised services, such as branch A's Thrift server)."""
+        with self._transaction() as cur:
+            cur.execute(
+                "SELECT * FROM branch_calendar WHERE opened_at IS NOT NULL "
+                "ORDER BY day DESC LIMIT 1"
+            )
+            record = cur.fetchone()
+        return _row(record).effective_branch if record else None
+
     # Decisions: Dagster only
 
     def create_day(

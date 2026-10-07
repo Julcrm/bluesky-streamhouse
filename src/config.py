@@ -273,6 +273,19 @@ ICEBERG_TARGET_FILE_SIZE_BYTES = 512 * 1024 * 1024
 # The maintenance JVM runs alone in the code server (1.5 GB, like branch B's)
 SPARK_MAINTENANCE_DRIVER_MEMORY = os.getenv("SPARK_MAINTENANCE_DRIVER_MEMORY", "900m")
 
+# --- Spark Thrift server, branch A Silver/Gold (decision D6 revised) ---
+# One long-lived JVM that dbt-spark (PyHive) connects to: no Spark session start per
+# dbt command. Runs from the opening of a day of A until the opening of the next day of
+# B (supervisor in service mode): it serves A's Silver/Gold, maintenance and nightly tests
+SPARK_THRIFT_HOST = os.getenv("SPARK_THRIFT_HOST", "localhost")
+SPARK_THRIFT_PORT = 10000
+# Two cores, as branch B's dbt runs DuckDB with 2 threads (same transform budget). With
+# local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
+SPARK_THRIFT_CORES = 2
+# Heap of the server JVM; the rest of the container's limit is off-heap (D31: ~600 MB of
+# metaspace, code cache and native memory measured, whatever the heap)
+SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "1g")
+
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10
 BENCHMARK_WINDOW_SECONDS = 5 * 60

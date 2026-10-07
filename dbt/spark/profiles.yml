@@ -1,36 +1,18 @@
-# Spark session (decision D6: no Thrift server) in the dbt process, local mode, with the
-# Lakekeeper Iceberg REST catalog as default catalog (D26): schemas are Iceberg namespaces
-# (bronze, silver, gold, meta). Mirrors src/resources/spark.py, which dbt cannot import.
+# dbt-spark reaches branch A's Spark Thrift server through PyHive (decision D6 revised):
+# one long-lived JVM, no Spark session start per dbt command. The server holds the Spark
+# settings (src/processing/spark/thrift_server.py): local[2], Lakekeeper Iceberg REST
+# catalog as default catalog (D26), so schemas are Iceberg namespaces (silver, gold, meta).
 bluesky_spark:
   target: default
   outputs:
     default:
       type: spark
-      method: session
-      host: NA
+      method: thrift
+      host: "{{ env_var('SPARK_THRIFT_HOST', 'localhost') }}"
+      port: 10000
       schema: silver
-      # One model at a time: predictable memory in the 1.5 GB code server, like branch B
+      # One model at a time: predictable memory in the server, like branch B
       threads: 1
-      server_side_parameters:
-        # Two cores, as branch B's dbt runs DuckDB with 2 threads (DUCKDB_THREADS, same
-        # budget for both transforms). local[*] saw 12 cores locally: 12 Parquet writers
-        # buffering row groups overflowed the 900 MB heap
-        spark.master: "local[{{ env_var('SPARK_DBT_CORES', '2') }}]"
-        # Sized like the Iceberg maintenance session, in the same container
-        spark.driver.memory: "{{ env_var('SPARK_DBT_DRIVER_MEMORY', '900m') }}"
-        spark.driver.extraJavaOptions: "{{ env_var('SPARK_DRIVER_JAVA_OPTIONS', '') }}"
-        spark.sql.session.timeZone: UTC
-        spark.sql.shuffle.partitions: "{{ env_var('SPARK_DBT_CORES', '2') }}"
-        spark.sql.adaptive.enabled: "true"
-        spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-        spark.sql.catalog.lakekeeper: org.apache.iceberg.spark.SparkCatalog
-        spark.sql.catalog.lakekeeper.type: rest
-        spark.sql.catalog.lakekeeper.uri: "{{ env_var('ICEBERG_CATALOG_URI', 'http://localhost:8181/catalog') }}"
-        spark.sql.catalog.lakekeeper.warehouse: "{{ env_var('ICEBERG_WAREHOUSE', 'bluesky') }}"
-        spark.sql.catalog.lakekeeper.header.X-Iceberg-Access-Delegation: remote-signing
-        spark.sql.defaultCatalog: lakekeeper
-        # insert_overwrite replaces only the partitions present in the output (Gold hours)
-        spark.sql.sources.partitionOverwriteMode: dynamic
-        # Jars resolved at image build (comma-separated paths), set by the caller
-        spark.jars: "{{ env_var('SPARK_JARS', '') }}"
-        spark.ui.enabled: "false"
+      # The server may still be starting (supervisor): retry the connection for ~1 min
+      connect_retries: 6
+      connect_timeout: 10

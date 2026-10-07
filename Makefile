@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark iceberg-maintenance dbt-build dbt-parse dagster clean
+.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark spark-thrift iceberg-maintenance dbt-spark-build dbt-build dbt-parse dagster clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -41,7 +41,7 @@ up:
 	$(COMPOSE_DEV) up -d --wait redpanda redpanda-console garage postgres lakekeeper
 	# One-shot: bootstrap Lakekeeper and create the Iceberg warehouse (idempotent).
 	# Not under --wait, which reports any exited container as a failure
-	$(COMPOSE_DEV) up lakekeeper-init
+	$(COMPOSE_DEV) up --build lakekeeper-init
 
 down:
 	$(COMPOSE_DEV) down
@@ -72,10 +72,15 @@ spark:
 iceberg-maintenance:
 	$(COMPOSE_DEV) --profile spark run --rm --build iceberg-maintenance
 
-# Branch A Silver/Gold with dbt-spark, in the stack's network (extra dbt args: ARGS=...)
+# Branch A Spark Thrift server (dbt-spark's engine), localhost:10000
+spark-thrift:
+	$(COMPOSE_DEV) --profile spark up -d --build --wait spark-thrift
+
+# Branch A dbt-spark against the Thrift server, in the stack's network
+# (dbt command and args: CMD="run --select silver_posts", default build)
 dbt-spark-build:
 	$(COMPOSE_DEV) --profile spark run --rm --build dbt-spark \
-		"SPARK_JARS=\$$(ls \$$SPARK_JARS_DIR/*.jar | paste -sd, -) exec /app/.venv/bin/dbt build --project-dir /app/dbt/spark --profiles-dir /app/dbt/spark $(ARGS)"
+		$(or $(CMD),build) --project-dir /app/dbt/spark --profiles-dir /app/dbt/spark
 
 # Branch B Silver/Gold on the local DuckLake (dbt does not read .env itself)
 DBT_DUCKDB = set -a && . ./.env && set +a && cd dbt/duckdb && uv run dbt

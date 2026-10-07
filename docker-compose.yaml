@@ -11,6 +11,9 @@
 #   - spark: branch A, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
 #   - bluesky-spark: branch A Dagster gRPC code server (Iceberg maintenance; phase 5:
 #     dbt-spark), port 4000 on the coolify network only
+#   - spark-thrift: branch A Spark Thrift server, dbt-spark's engine (port 10000 on the
+#     coolify network only), run by its supervisor from the opening of a day of A until
+#     the opening of the next day of B (D6 revised)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
 # Services of later phases (Spark, API) are added here.
@@ -229,10 +232,48 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # dbt-spark's engine (profile method: thrift)
+      - SPARK_THRIFT_HOST=spark-thrift
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ALERT_EMAIL=${ALERT_EMAIL}
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+    networks:
+      - coolify
+    restart: always
+
+  # Spark Thrift server (D6 revised): one long-lived JVM, local[2], that dbt-spark reaches
+  # through PyHive. Its supervisor (service mode) runs it while A owns the latest opened
+  # day: A's Silver/Gold, the nightly maintenance and tests; stopped on B's days. With
+  # bluesky-spark, the 2 GB transform budget of branch A (D31)
+  spark-thrift:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    command: [".venv/bin/python", "-m", "src.alternation.supervisor", "A", "--service", "--",
+              ".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
+    expose:
+      - "10000"
+    environment:
+      - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # Benchmark calendar (database bluesky_benchmark, D28), read by the supervisor
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Heap; ~600 MB more off-heap whatever the heap (classes of Hive, Thrift, Iceberg:
+      # metaspace 230 MB measured on 2026-10-07, capped at 320)
+      - SPARK_THRIFT_DRIVER_MEMORY=1g
+      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+      - MALLOC_ARENA_MAX=2
     stop_grace_period: 30s
     deploy:
       resources:
