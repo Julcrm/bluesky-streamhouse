@@ -88,9 +88,9 @@
     {%- set read_up_to = run_query(
         "WITH per_snapshot AS ("
         ~ " SELECT snapshot_id, count(*) AS n"
-        ~ " FROM ducklake_table_changes('" ~ bronze.database ~ "', '" ~ bronze.schema ~ "', '"
+        ~ " FROM ducklake_table_insertions('" ~ bronze.database ~ "', '" ~ bronze.schema ~ "', '"
         ~ bronze.identifier ~ "', " ~ read_from ~ ", " ~ current ~ ")"
-        ~ " WHERE change_type = 'insert' GROUP BY 1"
+        ~ " GROUP BY 1"
         ~ "), running AS ("
         ~ " SELECT snapshot_id, sum(n) OVER (ORDER BY snapshot_id) AS total FROM per_snapshot"
         ~ ") SELECT coalesce("
