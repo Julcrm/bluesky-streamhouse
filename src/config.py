@@ -318,8 +318,8 @@ SPARK_PACKAGES = (
 # Nightly, 30 min after the DuckDB branch's so the two never compete for the VPS
 ICEBERG_MAINTENANCE_CRON = "30 2 * * *"
 # Hourly compaction of the Bronze table on the Spark branch's days (D33): a commit every
-# 5 s leaves ~720 small files and manifests an hour, which every incremental Silver read
-# plans over. At :50, between two Silver/Gold ticks (:45 and :00)
+# 5 s leaves ~720 small data files an hour (~1 250 rows each), each one a signed S3 read
+# for every Silver pass and test. At :50, between two Silver/Gold ticks (:45 and :00)
 ICEBERG_HOURLY_COMPACTION_CRON = "50 * * * *"
 # Time travel kept: 24 h, as DuckLake (D21). With a commit every 5 s, ~17 000 snapshots
 # stay listed in every metadata.json: their cost is measured, not avoided (H8)

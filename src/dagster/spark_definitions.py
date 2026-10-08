@@ -227,13 +227,17 @@ def iceberg_maintenance_schedule(context: ScheduleEvaluationContext) -> RunReque
     key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK, GROUP],
     group_name=GROUP,
     description="Hourly compaction of the Bronze table on Spark days (D33): today's small "
-    "files and the manifests of the 5-second commits, so that incremental Silver reads "
-    "stay fast. Snapshot expiration and retention stay nightly.",
+    "files of the 5-second commits, so that incremental Silver reads stay fast. Manifests, "
+    "snapshot expiration and retention stay nightly.",
 )
 def iceberg_hourly_compaction(context: AssetExecutionContext) -> MaterializeResult:
-    """rewrite_data_files on today's partition, then rewrite_manifests, through the Thrift
-    server. Waits for a Silver/Gold run in progress (D30); its cost is a benchmark result
-    (H6), the slowdown without it was one (H8)."""
+    """rewrite_data_files on today's partition, through the Thrift server. No
+    rewrite_manifests: the streaming appends already merge manifests (Iceberg's merge on
+    commit, from 100 manifests) and one of those merges made it fail on 2026-10-08
+    (`Deleted manifest ... could not be found in the latest snapshot`); it stays in the
+    nightly maintenance, when the engine is stopped. Waits for a Silver/Gold run in
+    progress (D30); its cost is a benchmark result (H6), the slowdown without it was one
+    (H8)."""
     wait_for_runs(
         context.instance, context.log, context.run_id, None, config.SPARK_RUN_WAIT_SECONDS
     )
@@ -241,23 +245,15 @@ def iceberg_hourly_compaction(context: AssetExecutionContext) -> MaterializeResu
     before = iceberg.table_stats(sql, BRONZE)
     started = time.monotonic()
     rewritten = iceberg.rewrite_data_files(sql, BRONZE, iceberg.today_filter("event_time"))
-    files_seconds = round(time.monotonic() - started, 1)
-    started = time.monotonic()
-    manifests = iceberg.rewrite_manifests(sql, BRONZE)
-    manifests_seconds = round(time.monotonic() - started, 1)
+    seconds = round(time.monotonic() - started, 1)
     after = iceberg.table_stats(sql, BRONZE)
-    context.log.info(
-        f"Bronze: {before.data_files} -> {after.data_files} files, "
-        f"{before.manifests} -> {after.manifests} manifests"
-    )
+    context.log.info(f"Bronze: {before.data_files} -> {after.data_files} files in {seconds} s")
     return MaterializeResult(
         metadata={
             **{f"before_{k}": v for k, v in before.as_dict().items()},
             **{f"after_{k}": v for k, v in after.as_dict().items()},
-            "rewrite_data_files_seconds": files_seconds,
-            "rewrite_manifests_seconds": manifests_seconds,
+            "rewrite_data_files_seconds": seconds,
             "rewrite_data_files": rewritten,
-            "rewrite_manifests": manifests,
         }
     )
 
