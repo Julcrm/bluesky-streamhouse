@@ -6,7 +6,6 @@ streamhouse
 
 ```bash
 make install      # install dependencies
-make pre-commit   # install pre-commit hooks (run once after cloning)
 make run          # run the application
 make test         # run tests
 make lint         # lint and auto-fix with ruff

@@ -12,8 +12,12 @@ dist/
 build/
 *.egg-info/
 .idea/
-# Quix Streams local state (unused: the app is stateless)
+# Spark checkpoints when the streaming job runs from the host (config.SPARK_CHECKPOINT_DIR);
+# in Docker they live in the spark-checkpoint volume
 state/
+
+# Session-to-session working notes, kept local
+roadmap.md
 
 # dbt artifacts
 dbt/*/target/
