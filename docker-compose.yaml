@@ -68,9 +68,10 @@ services:
     deploy:
       resources:
         limits:
-          # Same limit as Spark (contract): Spark needs ~700-740 MiB, 768 MB did not fit.
+          # Same limit as Spark (contract, D27): Spark reached 951 MiB of real memory and
+          # rising in its first prod catch-up without swap (2026-10-08), 1 GB left no margin.
           # Quix: ~250 MiB live, ~700 MiB in the 35 M-row catch-up of 2026-09-28
-          memory: 1G
+          memory: 1280M
     networks:
       - coolify
     restart: always
@@ -210,10 +211,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          # D27, same as Quix: 951 MiB real and rising in the first prod catch-up (08/10)
+          memory: 1280M
     # No swap for the JVM (D31, as spark-thrift): a swapped-out heap would stall the
     # 5-second micro-batches and inflate the end-to-end latency measured (H4)
-    memswap_limit: 1G
+    memswap_limit: 1280M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
