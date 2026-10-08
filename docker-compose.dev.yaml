@@ -234,8 +234,9 @@ services:
       timeout: 5s
       retries: 24
       start_period: 15s
-    mem_limit: 1536m
-    memswap_limit: 1536m
+    # Same limits as prod (D31): no swap for the JVM
+    mem_limit: 1792m
+    memswap_limit: 1792m
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
