@@ -249,8 +249,9 @@ services:
         limits:
           # Same limit as before the Thrift server (D31, 2026-10-08): Dagster and the dbt
           # client take ~640 MiB, the Iceberg maintenance's own JVM fits until 5d. With
-          # spark-thrift, A's transform gets 3.25 GB against 2.5 GB for B: a benchmark
-          # result, not hidden. Swap: Docker's default, as bluesky-duckdb
+          # spark-thrift, A's transform may use up to 3.25 GB against 2.5 GB for B: limits
+          # are ceilings, reported as context; the benchmark compares the measured
+          # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
           memory: 1536M
     depends_on:
       lakekeeper-init:
