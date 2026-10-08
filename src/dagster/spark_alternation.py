@@ -30,7 +30,7 @@ from src.dagster.completeness import (
 )
 from src.dagster.runs import wait_for_runs
 from src.processing.bronze import BRONZE_TABLE
-from src.resources.spark import build_session
+from src.resources import thrift
 
 GROUP = "alternation"
 BRONZE = f"{settings.SPARK_CATALOG}.{settings.ICEBERG_BRONZE_NAMESPACE}.{BRONZE_TABLE}"
@@ -44,21 +44,17 @@ BRONZE = f"{settings.SPARK_CATALOG}.{settings.ICEBERG_BRONZE_NAMESPACE}.{BRONZE_
 def iceberg_day_completeness(
     context: AssetExecutionContext, config: CompletenessDay
 ) -> MaterializeResult:
-    """Count the day's offsets in Bronze; a missing one fails the run (alert). Alone in
-    this location (D30): it ends the day while Silver/Gold may still be running."""
+    """Count the day's offsets in Bronze through the Thrift server (no JVM here, 5d); a
+    missing one fails the run (alert). Alone in this location (D30): it ends the day
+    while Silver/Gold may still be running."""
     day = closed_day(config.day)
     wait_for_runs(
         context.instance, context.log, context.run_id, None, settings.SPARK_RUN_WAIT_SECONDS
     )
-    spark = build_session("bluesky-day-completeness", settings.SPARK_MAINTENANCE_DRIVER_MEMORY)
-    spark.sparkContext.setLogLevel("WARN")
-    try:
-        found = {
-            row["kafka_partition"]: row["found"]
-            for row in spark.sql(offsets_query(BRONZE, day)).collect()
-        }
-    finally:
-        spark.stop()
+    found = {
+        int(row["kafka_partition"]): int(row["found"])
+        for row in thrift.records(offsets_query(BRONZE, day))
+    }
     return completeness_result(context, day, found)
 
 

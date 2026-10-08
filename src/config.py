@@ -130,7 +130,7 @@ DAGSTER_RETRY_DELAY_SECONDS = 30
 # carries on from where this one stopped
 CATCHUP_MAX_PASSES = 100
 
-# --- Maintenance, branch B (decisions D14, D21) ---
+# --- Maintenance, branch B (decisions D14, D21); retention shared with branch A ---
 # Retention by event day (tables are split by day: a DELETE drops whole files)
 BRONZE_RETENTION_DAYS = 7
 SILVER_RETENTION_DAYS = 7
@@ -138,6 +138,8 @@ GOLD_RETENTION_DAYS = 30
 # Read positions in meta.silver_progress older than this are deleted (the last done
 # position of each model is always kept)
 SILVER_PROGRESS_RETENTION_DAYS = 7
+# Column a table's retention is measured on, by order of preference (both branches)
+RETENTION_TIME_COLUMNS = ("event_time", "minute", "hour")
 # Nightly, outside the 07:00-19:00 window of the branches (D10)
 MAINTENANCE_CRON = "0 2 * * *"
 # DuckLake options persisted by set_option, applied by CHECKPOINT (D21): 24 h of time
@@ -277,8 +279,6 @@ ICEBERG_SNAPSHOT_RETENTION_HOURS = 24
 ICEBERG_ORPHAN_MIN_AGE_HOURS = 25
 # Same target as DuckLake's CHECKPOINT (DUCKLAKE_TARGET_FILE_SIZE)
 ICEBERG_TARGET_FILE_SIZE_BYTES = 512 * 1024 * 1024
-# The maintenance JVM runs alone in the code server (1.5 GB, like branch B's)
-SPARK_MAINTENANCE_DRIVER_MEMORY = os.getenv("SPARK_MAINTENANCE_DRIVER_MEMORY", "900m")
 
 # --- Spark Thrift server, branch A Silver/Gold (decision D6 revised) ---
 # One long-lived JVM that dbt-spark (PyHive) connects to: no Spark session start per

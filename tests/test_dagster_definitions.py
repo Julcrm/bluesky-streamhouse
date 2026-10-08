@@ -201,7 +201,14 @@ def test_spark_code_location_loads_without_branch_b() -> None:
 
     job = defs.get_job_def(iceberg_maintenance_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
-    assert keys == {"bluesky/spark/maintenance/iceberg_bronze_maintenance"}
+    assert keys == {
+        "bluesky/spark/maintenance/iceberg_bronze_maintenance",
+        "bluesky/spark/maintenance/iceberg_transform_maintenance",
+    }
+    # One maintenance step at a time on the shared Thrift server
+    assert iceberg_maintenance_job.config["execution"]["config"]["multiprocess"] == {
+        "max_concurrent": 1
+    }
     job = defs.get_job_def(spark_silver_gold_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     assert "bluesky/spark/bronze/spark_bronze" in keys
@@ -214,13 +221,14 @@ def test_spark_code_location_loads_without_branch_b() -> None:
         assert defs.get_schedule_def(name) is not None
     assert defs.get_sensor_def("spark_failure_alert_sensor") is not None
     assert defs.get_sensor_def("iceberg_completeness_sensor") is not None
-    # In a fresh interpreter: loading branch A must not load branch B's modules
+    # In a fresh interpreter: loading branch A must not load branch B's modules, nor
+    # PySpark: every Spark statement goes through the Thrift server (5d)
     loaded = subprocess.run(
         [
             sys.executable,
             "-c",
             "import sys, src.dagster.spark_definitions; print([m for m in sys.modules "
-            "if m in ('src.dagster.assets', 'src.processing.backlog', 'duckdb')])",
+            "if m in ('src.dagster.assets', 'src.processing.backlog', 'duckdb', 'pyspark')])",
         ],
         capture_output=True,
         text=True,
@@ -247,4 +255,22 @@ def test_spark_schedule_runs_on_branch_a_days_only(monkeypatch, days, expected) 
     monkeypatch.setattr("src.alternation.monitor.recent_days", lambda: rows)
     with instance_for_test() as instance:
         result = spark_silver_gold_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, expected)
+
+
+@pytest.mark.parametrize(("owner", "expected"), [("A", RunRequest), ("B", SkipReason)])
+def test_iceberg_maintenance_only_while_a_owns_the_latest_day(monkeypatch, owner, expected):
+    """The Thrift server runs only while A owns the latest opened day (D6 revised)."""
+    from src.alternation import calendar as cal
+    from src.dagster.spark_definitions import iceberg_maintenance_schedule
+
+    class _Conn:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cal, "connect_benchmark", _Conn)
+    monkeypatch.setattr(cal.CalendarStore, "__init__", lambda self, conn: None)
+    monkeypatch.setattr(cal.CalendarStore, "owner", lambda self: owner)
+    with instance_for_test() as instance:
+        result = iceberg_maintenance_schedule(build_schedule_context(instance=instance))
     assert isinstance(result, expected)
