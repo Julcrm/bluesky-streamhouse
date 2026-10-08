@@ -379,6 +379,59 @@ services:
       - coolify
     restart: always
 
+  # --- Benchmark collector (phase 7, D34) ---------------------------------------
+  # Lists the containers for the collector (container id -> compose service), nothing
+  # else: no POST, no other endpoint. Inspecting a container shows its environment
+  # (secrets), so the proxy is only on the internal `bench` network, never on `coolify`
+  bench-docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    environment:
+      - CONTAINERS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+    networks:
+      - bench
+    restart: always
+
+  # Samples every 10 s the cgroups of the measured containers, the host (/proc) and the
+  # catalogs into the benchmark database. Neutral: measured, charged to no branch
+  bench-collector:
+    build:
+      context: .
+      dockerfile: docker/collector/Dockerfile
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - COLLECTOR_DOCKER_URL=http://bench-docker-proxy:2375
+    volumes:
+      # Read-only: the host's cgroup tree and /proc (CPU steal, PSI, memory)
+      - /sys/fs/cgroup:/host/cgroup:ro
+      - /proc:/host/proc:ro
+    stop_grace_period: 15s
+    # Written after each stored sample (every 10 s): stale after 6 ticks
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "heartbeat", "/tmp/heartbeat", "60"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    depends_on:
+      - bench-docker-proxy
+    networks:
+      - coolify
+      - bench
+    restart: always
+
 volumes:
   spark-checkpoint:
 
@@ -386,3 +439,6 @@ networks:
   coolify:
     external: true
     name: coolify
+  # Collector <-> Docker socket proxy only, no route out
+  bench:
+    internal: true

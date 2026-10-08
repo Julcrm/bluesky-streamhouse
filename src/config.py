@@ -204,6 +204,32 @@ ALTERNATION_START_DATE = date(2026, 10, 7)
 # Neutral database (neither branch's catalog) on the shared Postgres: branch_calendar,
 # later the benchmark windows (phase 7)
 BENCHMARK_DB = os.getenv("BENCHMARK_DB", "bluesky_benchmark")
+
+# --- Benchmark collector (phase 7, decision D34) ---
+# Raw samples every 10 s, kept 30 days; the 5-minute windows are computed from them
+COLLECTOR_INTERVAL_SECONDS = 10
+COLLECTOR_RETENTION_DAYS = 30
+# Host cgroup tree and /proc, mounted read-only in the bench-collector container
+COLLECTOR_CGROUP_ROOT = os.getenv("COLLECTOR_CGROUP_ROOT", "/host/cgroup")
+COLLECTOR_PROC_ROOT = os.getenv("COLLECTOR_PROC_ROOT", "/host/proc")
+# Docker socket proxy that only allows listing containers (id -> compose service)
+COLLECTOR_DOCKER_URL = os.getenv("COLLECTOR_DOCKER_URL", "http://bench-docker-proxy:2375")
+# Measured containers by compose service: (branch, layer), branch None for the shared
+# ones (D31, D34). Branch values are the calendar's (src/alternation/calendar.py)
+BENCHMARK_SERVICES: dict[str, tuple[str | None, str]] = {
+    "spark": ("spark", "streaming"),
+    "spark-thrift": ("spark", "transform"),
+    "bluesky-spark": ("spark", "transform"),
+    "lakekeeper": ("spark", "catalog"),
+    "quix": ("duckdb", "streaming"),
+    "bluesky-duckdb": ("duckdb", "transform"),
+    "producer": (None, "ingestion"),
+    "redpanda": (None, "broker"),
+    "garage": (None, "storage"),
+    "bench-collector": (None, "collector"),
+}
+# Catalogs in the shared Postgres: pg_stat_database counters, an estimate (D12, D34)
+CATALOG_DATABASES = ("ducklake_catalog", "iceberg_catalog")
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
