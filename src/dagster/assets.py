@@ -1,12 +1,12 @@
 """
-Dagster assets of branch B (code location `bluesky_duckdb`, decision D20).
+Dagster assets of the DuckDB branch (code location `bluesky_duckdb`, decision D20).
 Assets contain no business logic: they delegate to dbt and to the processing modules.
 
 - `quix_bronze`: Bronze table written by the Quix sink, observed (current snapshot).
 - dbt models: one asset per Silver and Gold model, dbt tests as asset checks. The
   project and its manifest are found from `src.config`, never an absolute path.
 
-Keys are `bluesky/quix/<layer>/<name>` and groups are the layers: the Dagster catalog is
+Keys are `bluesky/duckdb/<layer>/<name>` and groups are the layers: the Dagster catalog is
 shared with velib, each project keeps its own folder, each engine its own (D30).
 """
 
@@ -31,8 +31,8 @@ from src.processing.backlog import Backlog, current_backlog
 from src.processing.dbt_vars import gold_max_hours_per_run, silver_max_rows_per_run
 from src.resources.ducklake import connect
 
-# bluesky/quix/<layer>/<name> (D30)
-KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B]
+# bluesky/duckdb/<layer>/<name> (D30)
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_DUCKDB]
 
 dbt_project = DbtProject(
     project_dir=config.DBT_DUCKDB_PROJECT_DIR,
@@ -69,7 +69,7 @@ def quix_bronze() -> ObserveResult:
     manifest=dbt_project.manifest_path,
     project=dbt_project,
     dagster_dbt_translator=BlueskyDbtTranslator(
-        [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B]
+        [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_DUCKDB]
     ),
     retry_policy=RetryPolicy(
         max_retries=config.DAGSTER_RETRY_MAX, delay=config.DAGSTER_RETRY_DELAY_SECONDS

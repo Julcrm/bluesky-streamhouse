@@ -6,8 +6,8 @@ status in Dagster's history. No business logic here: see `src.alternation`.
 - 07:00 Europe/Paris: open the day for its branch (the engine's supervisor starts it).
 - 19:00: close it on the Kafka high watermarks, which also start the next day.
 - Manual force from the launchpad: `action: force`, `day`, `branch`.
-- `ducklake_day_completeness`: every offset of a finished day of branch B is in Bronze
-  (launched by the calendar sensor, src/dagster/sensors.py; branch A has its own in
+- `ducklake_day_completeness`: every offset of a finished day of the DuckDB branch is in Bronze
+  (launched by the calendar sensor, src/dagster/sensors.py; the Spark branch has its own in
   src/dagster/spark_alternation.py).
 """
 
@@ -51,7 +51,7 @@ class CalendarAction(Config):
     action: str = OPEN
     # ISO date, e.g. 2026-10-08
     day: str | None = None
-    # Force only: A or B
+    # Force only: spark or duckdb
     branch: str | None = None
 
 
@@ -148,9 +148,10 @@ def close_day_schedule(context: ScheduleEvaluationContext) -> RunRequest:
 
 
 @asset(
-    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_B, GROUP],
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_DUCKDB, GROUP],
     group_name=GROUP,
-    description="Every Kafka offset of a finished day of branch B is in its DuckLake Bronze (D28).",
+    description="Every Kafka offset of a finished day of the DuckDB branch is in its DuckLake "
+    "Bronze (D28).",
 )
 def ducklake_day_completeness(
     context: AssetExecutionContext, config: CompletenessDay
@@ -169,10 +170,10 @@ def ducklake_day_completeness(
 completeness_job = define_asset_job(
     name="bluesky_ducklake_day_completeness",
     selection=[ducklake_day_completeness],
-    description="Every Kafka offset of a finished day of branch B is in Bronze (D28).",
+    description="Every Kafka offset of a finished day of the DuckDB branch is in Bronze (D28).",
 )
 
 
 def completeness_request_b(day: date) -> RunRequest:
-    """One completeness run per finished day of branch B."""
-    return completeness_request(ducklake_day_completeness.op.name, cal.BRANCH_B, day)
+    """One completeness run per finished day of the DuckDB branch."""
+    return completeness_request(ducklake_day_completeness.op.name, cal.BRANCH_DUCKDB, day)

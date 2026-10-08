@@ -45,12 +45,12 @@ RAW_EVENTS_PARTITIONS = 3
 # 24h safety buffer for restarts and the daily branch switch — no replay (decision D1)
 RAW_EVENTS_RETENTION_MS = 24 * 60 * 60 * 1000
 
-# Branch B consumer group (branch A tracks offsets in its Spark checkpoint)
+# DuckDB branch consumer group (the Spark branch tracks offsets in its Spark checkpoint)
 QUIX_CONSUMER_GROUP = "branch-b-quix"
 # One checkpoint = one DuckLake commit, same cadence as Spark's 5 s trigger
 QUIX_COMMIT_INTERVAL_SECONDS = 5.0
 # Also commit after this many messages: bounds batch size and memory during catch-up.
-# Branch A must use the same cap (Spark maxOffsetsPerTrigger) to keep commit parity
+# Spark branch must use the same cap (Spark maxOffsetsPerTrigger) to keep commit parity
 QUIX_COMMIT_EVERY = 50_000
 # A crashed instance keeps its partitions until its session expires (45 s by default):
 # 10 s shortens recovery after a kill. Heartbeats (3 s default) must stay below a third
@@ -98,27 +98,27 @@ DUCKLAKE_TRANSFORM_METADATA_SCHEMA = "transform"
 # DuckLake's default is 10, which never inlines a checkpoint
 DUCKLAKE_DATA_INLINING_ROW_LIMIT = int(os.getenv("DUCKLAKE_DATA_INLINING_ROW_LIMIT", "5000"))
 # The Quix sink moves inlined rows to Parquet this often: one file per day every
-# ~5 min instead of one per checkpoint, and the flush cost stays in branch B's container
+# ~5 min instead of one per checkpoint, and the flush cost stays in the DuckDB branch's container
 DUCKLAKE_INLINED_FLUSH_INTERVAL_SECONDS = 5 * 60
 # DuckLake writes Snappy by default: zstd cuts Bronze from 213 to 121 B/row (decision D14).
 # Persisted in the catalog, applies to files written afterwards
 DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 
-# --- Dagster, branch B (decision D20) ---
-# Code location name in the dagster-workspace workspace.yaml: bluesky_duckdb (branch B)
-# or bluesky_spark (branch A), set by each code server container
+# --- Dagster, the DuckDB branch (decision D20) ---
+# Code location name in the dagster-workspace workspace.yaml: bluesky_duckdb (DuckDB branch)
+# or bluesky_spark (Spark branch), set by each code server container
 DAGSTER_CODE_LOCATION = os.getenv("DAGSTER_CODE_LOCATION", "bluesky_duckdb")
 # Every asset key starts with it: one folder per project in the shared Dagster catalog
 # (velib-lakehouse uses `velib`), then one per engine, then one per layer (bronze,
 # silver, gold, maintenance, alternation). Engine folders (D30): both branches have
 # the same model names (contract), and two code locations cannot declare the same key
 DAGSTER_ASSET_PREFIX = "bluesky"
-DAGSTER_ENGINE_B = "quix"
-DAGSTER_ENGINE_A = "spark"
+DAGSTER_ENGINE_DUCKDB = "duckdb"
+DAGSTER_ENGINE_SPARK = "spark"
 # dbt projects, found from this file (no absolute path, unlike velib)
 DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
 DBT_SPARK_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "spark"
-# Silver -> Gold every 15 min, same freshness contract as branch A
+# Silver -> Gold every 15 min, same freshness contract as the Spark branch
 DAGSTER_SCHEDULE_CRON = "*/15 * * * *"
 DAGSTER_TIMEZONE = "Europe/Paris"
 # A run retries on DuckLake's internal error when a Bronze scan races a Quix flush
@@ -130,7 +130,7 @@ DAGSTER_RETRY_DELAY_SECONDS = 30
 # carries on from where this one stopped
 CATCHUP_MAX_PASSES = 100
 
-# --- Maintenance, branch B (decisions D14, D21); retention shared with branch A ---
+# --- Maintenance of the DuckDB branch (D14, D21); retention shared with the Spark branch ---
 # Retention by event day (tables are split by day: a DELETE drops whole files)
 BRONZE_RETENTION_DAYS = 7
 SILVER_RETENTION_DAYS = 7
@@ -197,8 +197,9 @@ ALTERNATION_LATE_TIME = "19:30"
 # Hard stop the next morning, before the next opening: an engine still running is
 # stopped and its day is incomplete (messages missing from its Bronze)
 ALTERNATION_HARD_STOP_TIME = "06:30"
-# Branch B runs on this day, then A and B alternate (D1). A benchmark setting: kept here,
-# not in the environment (Coolify freezes a ${VAR:-default} at first deploy)
+# The DuckDB branch runs on this day, then the two branches alternate (D1). A benchmark
+# setting: kept here, not in the environment (Coolify freezes a ${VAR:-default} at
+# first deploy)
 ALTERNATION_START_DATE = date(2026, 10, 7)
 # Neutral database (neither branch's catalog) on the shared Postgres: branch_calendar,
 # later the benchmark windows (phase 7)
@@ -209,15 +210,16 @@ SUPERVISOR_POLL_SECONDS = 30
 SUPERVISOR_RESTART_DELAY_SECONDS = 30
 # Engines read their day's bounds this often while running (end offsets appear at 19:00)
 ENGINE_BOUNDS_POLL_SECONDS = 30
-# Caught up = first commit whose newest event is less than this old (same rule for A and
-# B, D28): separates the 07:00 catch-up from live processing in the benchmark
+# Caught up = first commit whose newest event is less than this old (same rule for both
+# branches, D28): separates the 07:00 catch-up from live processing in the benchmark
 CAUGHT_UP_LAG_SECONDS = 10
 # Silver/Gold of a branch keep running this long after its engine stopped: the last
 # Bronze commits of the day still have to reach Gold
 TRANSFORM_TAIL_SECONDS = 60 * 60
 # Branches whose engine is deployed: days of another branch are skipped without alert
-# (B ran alone first, D28; A deployed on a day of B, its first day the next one)
-DEPLOYED_BRANCHES = ("A", "B")
+# (the DuckDB branch ran alone first, D28; the Spark branch was deployed on a day of the
+# DuckDB branch, its first day the next one)
+DEPLOYED_BRANCHES = ("spark", "duckdb")
 # Calendar alerts (email), each once per day: engine not started this long after the
 # opening, day still open this long after the close (never closed), day still running
 # this long after the hard stop (the supervisor did not act)
@@ -230,7 +232,7 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
 
-# --- Branch A: Spark Structured Streaming -> Iceberg (phase 4) ---
+# --- Spark branch: Spark Structured Streaming -> Iceberg (phase 4) ---
 # Iceberg REST catalog (Lakekeeper, Postgres-backed). It signs the S3 requests of its
 # clients (remote signing): Spark holds no S3 key. Garage has no STS for vended creds
 ICEBERG_CATALOG_URI = os.getenv("ICEBERG_CATALOG_URI", "http://localhost:8181/catalog")
@@ -271,8 +273,8 @@ SPARK_PACKAGES = (
     f"org.apache.spark:spark-sql-kafka-0-10_2.13:{SPARK_VERSION}",
 )
 
-# --- Iceberg maintenance, branch A (decision D21 for B, same contract) ---
-# Nightly, 30 min after branch B's so the two never compete for the VPS
+# --- Iceberg maintenance, the Spark branch (decision D21 for the DuckDB branch, same contract) ---
+# Nightly, 30 min after the DuckDB branch's so the two never compete for the VPS
 ICEBERG_MAINTENANCE_CRON = "30 2 * * *"
 # Time travel kept: 24 h, as DuckLake (D21). With a commit every 5 s, ~17 000 snapshots
 # stay listed in every metadata.json: their cost is measured, not avoided (H8)
@@ -282,20 +284,21 @@ ICEBERG_ORPHAN_MIN_AGE_HOURS = 25
 # Same target as DuckLake's CHECKPOINT (DUCKLAKE_TARGET_FILE_SIZE)
 ICEBERG_TARGET_FILE_SIZE_BYTES = 512 * 1024 * 1024
 
-# --- Spark Thrift server, branch A Silver/Gold (decision D6 revised) ---
+# --- Spark Thrift server, Silver/Gold of the Spark branch (decision D6 revised) ---
 # One long-lived JVM that dbt-spark (PyHive) connects to: no Spark session start per
-# dbt command. Runs from the opening of a day of A until the opening of the next day of
-# B (supervisor in service mode): it serves A's Silver/Gold, maintenance and nightly tests
+# dbt command. Runs from the opening of a day of the Spark branch until the opening of
+# the next day of the DuckDB branch (supervisor in service mode): it serves the Spark
+# branch's Silver/Gold, maintenance and nightly tests
 SPARK_THRIFT_HOST = os.getenv("SPARK_THRIFT_HOST", "localhost")
 SPARK_THRIFT_PORT = 10000
-# Two cores, as branch B's dbt runs DuckDB with 2 threads (same transform budget). With
+# Two cores, as the DuckDB branch's dbt runs DuckDB with 2 threads (same transform budget). With
 # local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
 SPARK_THRIFT_CORES = 2
 # Heap of the server JVM; the rest of the 1.5 GB container is off-heap (~600 MB of
 # metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
 # 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
 SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
-# One run at a time in branch A's location (D30): maintenance and completeness wait for
+# One run at a time in the Spark branch's location (D30): maintenance and completeness wait for
 # the other runs (a 07:00 Silver/Gold catch-up included) up to this long
 SPARK_RUN_WAIT_SECONDS = 2 * 60 * 60
 

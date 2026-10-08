@@ -1,10 +1,10 @@
 """
-Dagster sensors of branch B, alerts by email (Resend, as velib, src/dagster/alerts.py):
+Dagster sensors of the DuckDB branch, alerts by email (Resend, as velib, src/dagster/alerts.py):
 - a run fails. A failed blocking storage check (90 GB bucket, 2 GB catalog) fails the
   maintenance run, so it alerts the same way (D14, D21);
 - the calendar shows a failed day (D28): engine not started, day not closed, day late
   (19:30), incomplete (06:30 hard stop), hard stop not applied. The same sensor
-  launches the completeness check of each finished day of branch B.
+  launches the completeness check of each finished day of the DuckDB branch.
 """
 
 import html
@@ -28,7 +28,7 @@ from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_jo
 
 __all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_failure_email"]
 
-# Every failed run of branch B's jobs, the calendar's (a refused opening: an engine may
+# Every failed run of the DuckDB branch's jobs, the calendar's (a refused opening: an engine may
 # still be running) and the completeness check's
 failure_alert_sensor = _failure_alert_sensor(
     "failure_alert_sensor",
@@ -46,7 +46,7 @@ SENT_ALERTS_KEPT = 50
 )
 def calendar_alert_sensor(context: SensorEvaluationContext) -> list[RunRequest] | SkipReason:
     """Every minute: email each failure the calendar shows (once per day and kind), and
-    request the completeness check of each finished day of branch B (once per day)."""
+    request the completeness check of each finished day of the DuckDB branch (once per day)."""
     sent: list[str] = json.loads(context.cursor) if context.cursor else []
     try:
         conn = cal.connect_benchmark()
@@ -66,6 +66,6 @@ def calendar_alert_sensor(context: SensorEvaluationContext) -> list[RunRequest] 
     requests_ = [
         completeness_request_b(day.day)
         for day in days
-        if day.status == cal.DONE and day.effective_branch == cal.BRANCH_B
+        if day.status == cal.DONE and day.effective_branch == cal.BRANCH_DUCKDB
     ]
-    return requests_ or SkipReason("No finished day of branch B to check")
+    return requests_ or SkipReason("No finished day of the DuckDB branch to check")

@@ -1,6 +1,6 @@
 -- =============================================================================
 -- What is left to read after a run, logged as one JSON line for the catch-up loop of
--- the Dagster asset (src/dagster/spark_assets.py), the counterpart of branch B's
+-- the Dagster asset (src/dagster/spark_assets.py), the counterpart of the DuckDB branch's
 -- src/processing/backlog.py. Measured by the Thrift server (D6 revised), parsed by
 -- src/processing/spark/backlog.py: the code server holds no Iceberg client.
 --   silver_rows: Bronze rows appended after the least advanced Silver position (from
@@ -32,7 +32,7 @@
                 ).rows[0][0] -%}
                 {%- do positions.update({node.name: position | string}) -%}
             {%- else -%}
-                {#- Never ran: the whole Bronze table is ahead of it (first day of A) -#}
+                {#- Never ran: the whole Bronze table is ahead of it (first Spark day) -#}
                 {%- set left = run_query(appended).rows[0][0] -%}
                 {%- do positions.update({node.name: "none"}) -%}
             {%- endif -%}

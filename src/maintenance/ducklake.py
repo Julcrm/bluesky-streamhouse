@@ -1,5 +1,5 @@
 """
-DuckLake maintenance of branch B (decision D21), run nightly by Dagster: retention
+DuckLake maintenance of the DuckDB branch (decision D21), run nightly by Dagster: retention
 DELETE (D14), then the native CHECKPOINT of each catalog (one per writer, D22), which
 flushes inlined rows, merges small files, expires snapshots and removes old and orphan
 files in one command (Iceberg needs 3-4 procedures for the same: a benchmark result).

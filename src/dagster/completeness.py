@@ -1,7 +1,8 @@
 """
 Completeness check of a finished day (decision D28), shared by both code locations:
-each asset runs `offsets_query` on its own Bronze (DuckDB for B, Spark for A) and hands
-the counts here. No engine import, so branch A's location does not load branch B's.
+each asset runs `offsets_query` on its own Bronze (DuckDB or Spark) and hands
+the counts here. No engine import, so the Spark branch's location does not load the
+DuckDB branch's.
 """
 
 from datetime import date

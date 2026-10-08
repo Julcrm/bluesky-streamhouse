@@ -1,5 +1,5 @@
 """
-Backlog of branch B: Bronze rows Silver has not read, Silver hours Gold has not rebuilt.
+Backlog of the DuckDB branch: Bronze rows Silver has not read, Silver hours Gold has not rebuilt.
 
 A Silver run reads at most `silver_max_rows_per_run` Bronze rows and a Gold model
 rebuilds at most `gold_max_hours_per_run` hours (dbt vars), so after a pause (the 07:00

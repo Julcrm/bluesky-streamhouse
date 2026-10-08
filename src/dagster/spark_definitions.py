@@ -1,11 +1,12 @@
 """
-Dagster Definitions of branch A, served by the gRPC code server `bluesky_spark`
+Dagster Definitions of the Spark branch, served by the gRPC code server `bluesky_spark`
 (decision D20: one code location per branch) to the shared dagster-workspace.
 
 Runs execute in this container (DefaultRunLauncher); dbt-spark's queries run in the
-Spark Thrift server (D6 revised), both within branch A's transform limits (D31).
-Silver/Gold every 15 min on A's days (src/dagster/spark_assets.py), nightly tests after
-a day of A (D30), Iceberg maintenance of every table and completeness check of A's days
+Spark Thrift server (D6 revised), both within the Spark branch's transform limits (D31).
+Silver/Gold every 15 min on the Spark branch's days (src/dagster/spark_assets.py),
+nightly tests after each of its days (D30), Iceberg maintenance of every table and
+completeness check of its days
 (src/dagster/spark_alternation.py), all through the Thrift server: no JVM here (5d).
 One run at a time in this location (D30): the Thrift server is shared.
 """
@@ -123,7 +124,7 @@ def _maintain(
 
 @asset(
     name="iceberg_bronze_maintenance",
-    key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_A, GROUP],
+    key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK, GROUP],
     group_name=GROUP,
     description="Iceberg Bronze: retention (7 days), file and manifest rewrites, snapshot "
     "expiration (24 h), orphan files (D14, D21), through the Thrift server. The "
@@ -139,9 +140,9 @@ def iceberg_bronze_maintenance(context: AssetExecutionContext) -> MaterializeRes
 
 @asset(
     name="iceberg_transform_maintenance",
-    key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_A, GROUP],
+    key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK, GROUP],
     group_name=GROUP,
-    # Not chained to Bronze: a Bronze failure must not stop Silver and Gold (as B)
+    # Not chained to Bronze: a Bronze failure must not stop Silver and Gold (as the DuckDB branch)
     description="Iceberg Silver (7 days), Gold (30 days) and read positions (7 days, the "
     "last of each reader kept): same steps as Bronze (D14, D21).",
 )
@@ -168,7 +169,7 @@ def iceberg_transform_maintenance(context: AssetExecutionContext) -> Materialize
 
 
 housekeeping = housekeeping_asset(
-    [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_A, GROUP],
+    [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK, GROUP],
     GROUP,
     dbt_project.project_dir / dbt_project.target_path,
 )
@@ -179,9 +180,11 @@ iceberg_maintenance_job = define_asset_job(
     selection=AssetSelection.assets(
         iceberg_bronze_maintenance, iceberg_transform_maintenance, housekeeping
     ),
-    description="Nightly Iceberg maintenance of branch A: Bronze, Silver, Gold, positions (D21), "
+    description="Nightly Iceberg maintenance of the Spark branch: Bronze, Silver, Gold, "
+    "positions (D21), "
     "and the housekeeping of this code location.",
-    # One step at a time, as branch B's: both send their procedures to the one Thrift server
+    # One step at a time, as the DuckDB branch's: both send their procedures to the one
+    # Thrift server
     config={"execution": {"config": {"multiprocess": {"max_concurrent": 1}}}},
 )
 
@@ -193,11 +196,11 @@ iceberg_maintenance_job = define_asset_job(
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def iceberg_maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every night at 02:30 (Europe/Paris), after branch B's maintenance, only while A
-    owns the latest opened day: the Thrift server runs then, from the opening of a day
-    of A to the opening of B's next day (D6 revised). So it runs the night after each
-    day of A; Bronze is then at most 8 days old. The run waits for the other runs of
-    this location (D30)."""
+    """Every night at 02:30 (Europe/Paris), after the DuckDB branch's maintenance, only
+    while the Spark branch owns the latest opened day: the Thrift server runs then, from
+    the opening of a Spark day to the opening of the next DuckDB day (D6 revised). So it
+    runs the night after each Spark day; Bronze is then at most 8 days old. The run waits
+    for the other runs of this location (D30)."""
     try:
         conn = cal.connect_benchmark()
         try:
@@ -206,7 +209,7 @@ def iceberg_maintenance_schedule(context: ScheduleEvaluationContext) -> RunReque
             conn.close()
     except Exception as e:  # noqa: BLE001 - calendar not created yet, or Postgres down
         return SkipReason(f"Calendar unreachable: {e}")
-    if owner != cal.BRANCH_A:
+    if owner != cal.BRANCH_SPARK:
         return SkipReason(f"Branch {owner} owns the latest day: the Thrift server is stopped")
     previous = [
         run
@@ -228,7 +231,7 @@ spark_nightly_checks_job = define_asset_job(
     name="bluesky_spark_nightly_checks",
     # The dbt tests only, no model: rerun over a day instead of 2 hours (D25)
     selection=AssetSelection.checks_for_assets(spark_dbt_models),
-    description="Every dbt test of Silver and Gold over the last day of branch A (D25, D30).",
+    description="Every dbt test of Silver and Gold over the last Spark day (D25, D30).",
     tags={config.NIGHTLY_CHECKS_TAG: "true"},
 )
 
@@ -240,12 +243,13 @@ spark_nightly_checks_job = define_asset_job(
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def spark_silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every 15 min on branch A's days only (D28), as branch B's: its engine runs, or
+    """Every 15 min on the Spark branch's days only (D28), as the DuckDB branch's: its
+    engine runs, or
     stopped less than an hour ago. Any run of this location blocks it (D30)."""
     days = monitor.recent_days()
-    due = monitor.transform_due(days, cal.BRANCH_A, datetime.now(UTC)) if days else None
+    due = monitor.transform_due(days, cal.BRANCH_SPARK, datetime.now(UTC)) if days else None
     if due is None:
-        return SkipReason("No day of branch A running or just finished")
+        return SkipReason("No day of the Spark branch running or just finished")
     active = active_location_runs(context.instance, spark_silver_gold_job.name)
     if active:
         return SkipReason(f"Run {active[0].run_id} ({active[0].job_name}) still in progress")
@@ -259,13 +263,13 @@ def spark_silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def spark_nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every night at 03:00 (Europe/Paris), only after a day of branch A (D30): the
-    Thrift server is still up (it runs until B's next opening). The run waits for the
+    """Every night at 03:00 (Europe/Paris), only after a day of the Spark branch (D30): the
+    Thrift server is still up (it runs until the next DuckDB day opens). The run waits for the
     other runs of this location."""
     days = monitor.recent_days()
-    due = monitor.nightly_checks_due(days, cal.BRANCH_A, datetime.now(UTC)) if days else None
+    due = monitor.nightly_checks_due(days, cal.BRANCH_SPARK, datetime.now(UTC)) if days else None
     if due is None:
-        return SkipReason("The day that just ended was not a finished day of branch A")
+        return SkipReason("The day that just ended was not a finished day of the Spark branch")
     previous = [
         run
         for run in active_location_runs(context.instance, spark_nightly_checks_job.name)

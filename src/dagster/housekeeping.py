@@ -7,7 +7,8 @@ manifest, run results, compiled SQL); nothing reads it once the run has logged i
 events. Kept 2 days for debugging, then deleted: over a frozen measurement period with
 no redeploy, they would add up to several GB per container.
 
-No engine import here: branch A's code location must not load DuckDB, nor B's a JVM.
+No engine import here: the Spark branch's code location must not load DuckDB, nor the
+DuckDB branch's a JVM.
 """
 
 import re

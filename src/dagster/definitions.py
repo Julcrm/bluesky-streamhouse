@@ -1,9 +1,9 @@
 """
-Dagster Definitions of branch B, served by the gRPC code server `bluesky_duckdb`
+Dagster Definitions of the DuckDB branch, served by the gRPC code server `bluesky_duckdb`
 (decision D20) to the shared dagster-workspace.
 
 Runs execute in this container (DefaultRunLauncher), so dbt and DuckDB memory count
-against its own limit: the cost of branch B's transformations stays attributable.
+against its own limit: the cost of the DuckDB branch's transformations stays attributable.
 """
 
 from datetime import UTC, datetime
@@ -54,12 +54,12 @@ __all__ = [
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every 15 min on branch B's days only (D28), one run at a time: a catch-up run can
+    """Every 15 min on the DuckDB branch's days only (D28), one run at a time: a catch-up run can
     outlast the interval, and a second dbt would wait on the first one's DuckDB file
     lock and fail."""
     due = transform_due()
     if due is None:
-        return SkipReason("No day of branch B running or just finished")
+        return SkipReason("No day of the DuckDB branch running or just finished")
     # Any run of this code location blocks it, maintenance included (same catalogs)
     active = active_location_runs(context.instance, silver_gold_job.name)
     if active:
@@ -68,18 +68,19 @@ def silver_gold_schedule(context: ScheduleEvaluationContext) -> RunRequest | Ski
 
 
 def transform_due() -> str | None:
-    """Why branch B's Silver/Gold runs now (its engine runs, or stopped less than an
-    hour ago), None otherwise. CPU spent on dbt while branch A is measured would bias
+    """Why the DuckDB branch's Silver/Gold runs now (its engine runs, or stopped less than an
+    hour ago), None otherwise. CPU spent on dbt while the Spark branch is measured would bias
     the benchmark. Calendar unreachable: not run (the engine does not run either)."""
     days = monitor.recent_days()
-    return monitor.transform_due(days, cal.BRANCH_B, datetime.now(UTC)) if days else None
+    return monitor.transform_due(days, cal.BRANCH_DUCKDB, datetime.now(UTC)) if days else None
 
 
 def nightly_checks_due() -> str | None:
-    """Why branch B's nightly tests run tonight (the day that just ended was B's, D30),
+    """Why the DuckDB branch's nightly tests run tonight (the day that just ended was
+    its own, D30),
     None otherwise. Calendar unreachable: not run."""
     days = monitor.recent_days()
-    return monitor.nightly_checks_due(days, cal.BRANCH_B, datetime.now(UTC)) if days else None
+    return monitor.nightly_checks_due(days, cal.BRANCH_DUCKDB, datetime.now(UTC)) if days else None
 
 
 @schedule(
@@ -109,11 +110,11 @@ def maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | Ski
 )
 def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     """Every night at 03:00 (Europe/Paris), after the maintenance: every dbt test over a
-    day (D25), only after a day of branch B (D30). The run itself waits for the other
+    day (D25), only after a day of the DuckDB branch (D30). The run itself waits for the other
     runs of the location."""
     due = nightly_checks_due()
     if due is None:
-        return SkipReason("The day that just ended was not a finished day of branch B")
+        return SkipReason("The day that just ended was not a finished day of the DuckDB branch")
     previous = [
         run
         for run in active_location_runs(context.instance, nightly_checks_job.name)

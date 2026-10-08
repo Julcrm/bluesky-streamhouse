@@ -1,5 +1,5 @@
 """
-Iceberg maintenance of branch A, the counterpart of DuckLake's single CHECKPOINT
+Iceberg maintenance of the Spark branch, the counterpart of DuckLake's single CHECKPOINT
 (decision D21): Iceberg needs one procedure per task. That difference is a benchmark
 result (operational complexity).
 
@@ -10,7 +10,8 @@ remove_orphan_files (failed writes). Every file deletion goes through Lakekeeper
 remote signing (no S3 key in Spark).
 
 Every statement runs on the Spark Thrift server (D6 revised, 5d), as SQL: the code
-server of A holds no JVM. Functions take the statement runner as their first argument
+server of the Spark branch holds no JVM. Functions take the statement runner as their
+first argument
 (`src.resources.thrift.records` in production, a fake in the tests).
 
 Kept free of Dagster imports: the assets only call these functions.
@@ -80,7 +81,7 @@ def table_stats(sql: Sql, table: str) -> TableStats:
 
 def list_tables(sql: Sql, namespace: str) -> list[str]:
     """Tables of one namespace, fully qualified, found in the catalog: a new Silver or
-    Gold model gets its namespace's retention without a code change (as branch B)."""
+    Gold model gets its namespace's retention without a code change (as the DuckDB branch)."""
     rows = sql(f"SHOW TABLES IN {config.SPARK_CATALOG}.{namespace}")
     return sorted(f"{config.SPARK_CATALOG}.{namespace}.{row['tableName']}" for row in rows)
 
@@ -173,7 +174,7 @@ def stale_readers(
 ) -> dict[str, str]:
     """Readers of the maintained `tables` whose oldest unread snapshot is older than the
     time travel window, or whose position is already gone: expire_snapshots would make
-    their next incremental read fail (guard D16, D21, as branch B)."""
+    their next incremental read fail (guard D16, D21, as the DuckDB branch)."""
     limit = (now or datetime.now(UTC)) - timedelta(hours=max_age_hours)
     stale = {}
     for reader, (table, snapshot_id) in positions.items():

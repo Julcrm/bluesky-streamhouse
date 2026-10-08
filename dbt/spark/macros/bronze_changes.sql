@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Incremental reads of Bronze with Iceberg's incremental append scan (phase 5, the
--- counterpart of branch B's DuckLake change feed, D16).
+-- counterpart of the DuckDB branch's DuckLake change feed, D16).
 --
 -- `SELECT ... FROM t WITH ('start-snapshot-id' = a, 'end-snapshot-id' = b)` returns the
 -- rows of the files appended after snapshot a up to b; snapshots that are not appends

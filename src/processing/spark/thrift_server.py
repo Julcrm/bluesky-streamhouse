@@ -1,5 +1,5 @@
 """
-Spark Thrift server of branch A (decision D6 revised): one long-lived JVM in local mode
+Spark Thrift server of the Spark branch (decision D6 revised): one long-lived JVM in local mode
 that dbt-spark reaches through PyHive (profile `method: thrift`), with the Lakekeeper
 Iceberg catalog as default catalog (D26).
 
@@ -30,7 +30,7 @@ def server_conf() -> dict[str, str]:
             filter(None, [config.SPARK_DRIVER_JAVA_OPTIONS, "-Dderby.system.home=/tmp/derby"])
         ),
         "spark.sql.warehouse.dir": "/tmp/spark-warehouse",
-        # Timestamps are UTC end to end, like branch B's DuckDB sessions
+        # Timestamps are UTC end to end, like the DuckDB branch's DuckDB sessions
         "spark.sql.session.timeZone": "UTC",
         "spark.sql.shuffle.partitions": str(config.SPARK_THRIFT_CORES),
         "spark.sql.adaptive.enabled": "true",

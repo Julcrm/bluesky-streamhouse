@@ -1,6 +1,6 @@
 """
-Client of branch A's Spark Thrift server (decision D6 revised), the same PyHive
-connection dbt-spark opens: the code server of A runs no JVM of its own. Lakekeeper
+Client of the Spark branch's Thrift server (decision D6 revised), the same PyHive
+connection dbt-spark opens: the Spark branch's code server runs no JVM of its own. Lakekeeper
 is the server's default catalog, so tables are `<namespace>.<table>`.
 """
 

@@ -16,7 +16,7 @@ from src.alternation.completeness import (
 
 DAY = cal.CalendarDay(
     day=datetime(2026, 10, 8).date(),
-    branch="B",
+    branch="duckdb",
     forced_branch=None,
     start_offsets={0: 100, 1: 200},
     end_offsets=None,
@@ -28,7 +28,7 @@ OPEN_UTC = datetime(2026, 10, 8, 5, 0, tzinfo=UTC)
 CLOSE_UTC = datetime(2026, 10, 8, 17, 0, tzinfo=UTC)
 
 
-def _kinds(days, now, deployed=("B",)) -> set[str]:
+def _kinds(days, now, deployed=("duckdb",)) -> set[str]:
     return {a.key.split(":")[1] for a in monitor.alerts(days, now, deployed)}
 
 
@@ -59,10 +59,10 @@ def test_late_at_19_30_incomplete_and_missed_stop() -> None:
 
 
 def test_no_alert_for_a_branch_not_deployed() -> None:
-    """A's days while B runs alone: no engine is expected."""
-    a_day = replace(DAY, branch="A")
-    assert _kinds([a_day], CLOSE_UTC + timedelta(hours=1)) == set()
-    assert _kinds([a_day], CLOSE_UTC + timedelta(hours=1), ("A", "B")) == {
+    """Spark days while the DuckDB branch runs alone: no engine is expected."""
+    spark_day = replace(DAY, branch="spark")
+    assert _kinds([spark_day], CLOSE_UTC + timedelta(hours=1)) == set()
+    assert _kinds([spark_day], CLOSE_UTC + timedelta(hours=1), ("spark", "duckdb")) == {
         "not_started",
         "not_closed",
         "late",
@@ -70,23 +70,23 @@ def test_no_alert_for_a_branch_not_deployed() -> None:
 
 
 def test_alert_keys_are_per_day_and_kind() -> None:
-    (alert,) = monitor.alerts([replace(DAY, status=cal.INCOMPLETE)], CLOSE_UTC, ("B",))
+    (alert,) = monitor.alerts([replace(DAY, status=cal.INCOMPLETE)], CLOSE_UTC, ("duckdb",))
     assert alert.key == "2026-10-08:incomplete"
     assert "2026-10-08" in alert.subject
 
 
 def test_transform_runs_on_b_days_and_one_hour_after() -> None:
-    assert monitor.transform_due([DAY], "B", OPEN_UTC) is not None
-    assert monitor.transform_due([DAY], "A", OPEN_UTC) is None
+    assert monitor.transform_due([DAY], "duckdb", OPEN_UTC) is not None
+    assert monitor.transform_due([DAY], "spark", OPEN_UTC) is None
     stopped = replace(DAY, status=cal.DONE, stopped_at=CLOSE_UTC)
-    assert monitor.transform_due([stopped], "B", CLOSE_UTC + timedelta(minutes=59)) is not None
-    assert monitor.transform_due([stopped], "B", CLOSE_UTC + timedelta(minutes=61)) is None
-    assert monitor.transform_due([], "B", OPEN_UTC) is None
+    assert monitor.transform_due([stopped], "duckdb", CLOSE_UTC + timedelta(minutes=59)) is not None
+    assert monitor.transform_due([stopped], "duckdb", CLOSE_UTC + timedelta(minutes=61)) is None
+    assert monitor.transform_due([], "duckdb", OPEN_UTC) is None
 
 
 def test_completeness_query_counts_distinct_offsets_in_bounds() -> None:
     """One scan for every partition; duplicates and offsets outside the day do not hide
-    a hole. Plain SQL: the same query runs in DuckDB (B) and Spark SQL (A)."""
+    a hole. Plain SQL: the same query runs in DuckDB and Spark SQL."""
     conn = duckdb.connect()
     conn.execute(
         "CREATE TABLE bronze_events AS SELECT * FROM (VALUES "
@@ -101,19 +101,19 @@ def test_completeness_query_counts_distinct_offsets_in_bounds() -> None:
     assert (metadata["messages"], metadata["missing"]) == (7, 2)
 
 
-def test_nightly_checks_only_the_night_after_a_day_of_the_branch() -> None:
+def test_nightly_checks_only_the_night_after_spark_day_of_the_branch() -> None:
     """03:00 on 10/09 (01:00 UTC): the day that ended at 19:00 on 10/08 decides (D30)."""
     night = datetime(2026, 10, 9, 1, 0, tzinfo=UTC)
     done = replace(DAY, status=cal.DONE, stopped_at=CLOSE_UTC)
-    assert monitor.nightly_checks_due([done], "B", night) is not None
-    assert monitor.nightly_checks_due([done], "A", night) is None
-    # The night after, nothing of B in the window
-    assert monitor.nightly_checks_due([done], "B", night + timedelta(days=1)) is None
+    assert monitor.nightly_checks_due([done], "duckdb", night) is not None
+    assert monitor.nightly_checks_due([done], "spark", night) is None
+    # The night after, nothing of the DuckDB branch in the window
+    assert monitor.nightly_checks_due([done], "duckdb", night + timedelta(days=1)) is None
     # Late and still finishing: tested; closing on time but not done yet: not
     closing = replace(DAY, status=cal.CLOSING)
-    assert monitor.nightly_checks_due([closing], "B", night) is None
+    assert monitor.nightly_checks_due([closing], "duckdb", night) is None
     late = replace(closing, late_at=CLOSE_UTC + timedelta(minutes=30))
-    assert monitor.nightly_checks_due([late], "B", night) is not None
-    # A skipped day of A (not deployed): no test for A
-    skipped = replace(DAY, branch="A", status=cal.SKIPPED)
-    assert monitor.nightly_checks_due([skipped], "A", night) is None
+    assert monitor.nightly_checks_due([late], "duckdb", night) is not None
+    # A skipped day of the Spark branch (not deployed): no test for it
+    skipped = replace(DAY, branch="spark", status=cal.SKIPPED)
+    assert monitor.nightly_checks_due([skipped], "spark", night) is None

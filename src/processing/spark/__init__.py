@@ -1,1 +1,1 @@
-"""Branch A — PySpark Structured Streaming writing to Apache Iceberg."""
+"""Spark branch — PySpark Structured Streaming writing to Apache Iceberg."""

@@ -1,8 +1,8 @@
 -- =============================================================================
 -- Incremental Gold: rebuild only the hours touched by new Silver rows (D19, same
--- contract as branch B), with Iceberg's mechanisms.
+-- contract as the DuckDB branch), with Iceberg's mechanisms.
 --
--- Branch B orders every Silver change by the catalog-wide DuckLake snapshot id. Iceberg
+-- DuckDB branch orders every Silver change by the catalog-wide DuckLake snapshot id. Iceberg
 -- has one snapshot history per table, so each Gold model keeps, per Silver table it
 -- reads, the last Silver snapshot it has taken into account (meta.gold_progress), and
 -- the hours it still has to rebuild (meta.gold_pending). Each run:
@@ -13,7 +13,7 @@
 --      partitions (an hour that went past its top 50 loses its old rows too);
 --   3. post-hook: marks the positions done and removes the rebuilt hours.
 -- A crash between two steps only rebuilds an hour again: every step is idempotent.
--- The cap exists for the same reason as in branch B: an exact count(DISTINCT) over
+-- The cap exists for the same reason as in the DuckDB branch: an exact count(DISTINCT) over
 -- dozens of hours does not fit the container.
 -- =============================================================================
 

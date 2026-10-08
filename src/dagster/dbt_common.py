@@ -1,6 +1,7 @@
 """
 dagster-dbt pieces shared by both branches' Silver/Gold assets (decisions D20, D30).
-No engine import here: branch A's code location must not load DuckDB, nor B's a JVM.
+No engine import here: the Spark branch's code location must not load DuckDB, nor the
+DuckDB branch's a JVM.
 """
 
 import subprocess

@@ -1,7 +1,7 @@
 """
 Failure alerts by email (Resend, as velib), shared by both code locations: each builds
-its own sensor over its own jobs. No job import here, so branch A's code location does
-not load branch B's dbt project.
+its own sensor over its own jobs. No job import here, so the Spark branch's code location does
+not load the DuckDB branch's dbt project.
 """
 
 import html

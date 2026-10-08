@@ -1,5 +1,5 @@
 # =============================================================================
-# Spark Structured Streaming job — Bluesky Streamhouse, branch A
+# Spark Structured Streaming job — Bluesky Streamhouse, the Spark branch
 # Consumes Redpanda `raw_events` and appends to the Iceberg Bronze table through the
 # Lakekeeper REST catalog (Parquet on Garage, S3 requests signed by Lakekeeper).
 # Runtime: Python 3.12-slim, Java 21 (Debian trixie; Spark 4.1 supports 17 and 21),
@@ -52,7 +52,7 @@ RUN adduser --disabled-password --gecos '' appuser \
     && mkdir -p /app/state/spark-checkpoint/days && chown -R appuser /app/state
 USER appuser
 
-# The supervisor (decision D28) is PID 1: it runs the job only on branch A's days and
+# The supervisor (decision D28) is PID 1: it runs the job only on the Spark branch's days and
 # passes SIGTERM to it, which stops the query cleanly. Exec form, no shell in between
-CMD [".venv/bin/python", "-m", "src.alternation.supervisor", "A", "--", \
+CMD [".venv/bin/python", "-m", "src.alternation.supervisor", "spark", "--", \
      ".venv/bin/python", "-m", "src.processing.spark.stream_job"]
