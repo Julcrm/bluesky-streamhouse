@@ -55,8 +55,11 @@ RUN adduser --disabled-password --gecos '' appuser \
     && mkdir -p /tmp/spark && chown -R appuser /opt/dagster /tmp/spark /app/dbt/spark
 USER appuser
 
-# Manifest compiled at build (no Thrift server needed): the assets load it at startup
-RUN .venv/bin/dbt parse --project-dir dbt/spark --profiles-dir dbt/spark
+# Manifest compiled at build (no Thrift server needed): the assets load it at startup.
+# dbt hashes the profile's connection keys (host included) into the partial parse file:
+# parsed with the runtime host (compose), every dbt command reuses it instead of a full
+# parse (8 full parses per catch-up run otherwise)
+RUN SPARK_THRIFT_HOST=spark-thrift .venv/bin/dbt parse --project-dir dbt/spark --profiles-dir dbt/spark
 
 EXPOSE 4000
 
