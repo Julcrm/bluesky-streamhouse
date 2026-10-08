@@ -105,6 +105,19 @@ def alerts(
     return found
 
 
+def recent_days(limit: int = 3) -> list[cal.CalendarDay]:
+    """The latest calendar days, empty when the calendar is unreachable (table not
+    created yet, or Postgres down): schedules then skip their tick."""
+    try:
+        conn = cal.connect_benchmark()
+        try:
+            return cal.CalendarStore(conn).recent(limit)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - skip the tick, retried at the next one
+        return []
+
+
 def transform_due(days: list[cal.CalendarDay], branch: str, now: datetime) -> str | None:
     """Why the branch's Silver/Gold should run now, None if it should not: its engine
     may be running, or stopped less than TRANSFORM_TAIL_SECONDS ago (the day's last
@@ -118,4 +131,20 @@ def transform_due(days: list[cal.CalendarDay], branch: str, now: datetime) -> st
             seconds=config.TRANSFORM_TAIL_SECONDS
         ):
             return f"day {day.day} stopped at {day.stopped_at:%H:%M} UTC, finishing Gold"
+    return None
+
+
+def nightly_checks_due(days: list[cal.CalendarDay], branch: str, now: datetime) -> str | None:
+    """Why the branch's nightly tests should run now (D30), None if they should not: the
+    day that ended at the last 19:00 is the branch's and its engine is done, or late and
+    finishing. Otherwise the one-day test window holds none of the branch's rows, and
+    the tests would pass without checking anything."""
+    ended = cal.benchmark_day(now) - timedelta(days=1)
+    for day in days:
+        if day.day != ended or day.effective_branch != branch:
+            continue
+        if day.status == cal.DONE:
+            return f"day {day.day} of branch {branch} is done"
+        if day.late_at is not None:
+            return f"day {day.day} of branch {branch} is late, finishing"
     return None

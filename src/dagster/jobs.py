@@ -1,4 +1,4 @@
-"""Jobs of branch B: Silver/Gold every 15 min, maintenance every night (D20, D21)."""
+"""Jobs of the DuckDB branch: Silver/Gold every 15 min, maintenance every night (D20, D21)."""
 
 from dagster import AssetSelection, define_asset_job
 

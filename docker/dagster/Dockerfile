@@ -1,5 +1,5 @@
 # =============================================================================
-# Dagster gRPC code server `bluesky_duckdb` — Bluesky Streamhouse, branch B
+# Dagster gRPC code server `bluesky_duckdb` — Bluesky Streamhouse, the DuckDB branch
 # Serves the Silver/Gold dbt assets to the shared dagster-workspace on port 4000.
 # Runs execute here (DefaultRunLauncher): dbt-duckdb and DuckDB, no JVM (decision D20).
 # Runtime: Python 3.12-slim, uv, dagster, dagster-dbt, dbt-duckdb (dagster group only)

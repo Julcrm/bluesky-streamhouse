@@ -1,0 +1,141 @@
+version: 2
+
+# Scans of whole columns (unique, accepted_values) only check the rows processed in the
+# last var('test_window') (D25): what the last runs wrote, late catch-up rows included.
+# The nightly job reruns them over a day. not_null needs no window (column statistics).
+
+models:
+  - name: silver_posts
+    description: "Post creations and edits, one row per Jetstream event (D18, D19)."
+    columns:
+      - name: seq
+        description: "Jetstream sequence, deduplication key"
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: did
+        description: "Author account"
+        tests: [not_null]
+      - name: operation
+        description: "create or update (edits are rare, ~0.01 %)"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["create", "update"]
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: event_time
+        description: "Jetstream reception time (UTC): the reference time of every metric"
+        tests: [not_null]
+      - name: created_at
+        description: "Time declared by the client, may be backdated (informative only)"
+      - name: langs
+        description: "Declared languages (BCP-47), NULL when the client sets none"
+      - name: hashtags
+        description: "Distinct lowercase tags: facet tags and record tags"
+      - name: bronze_snapshot_id
+        description: "Bronze (Iceberg) snapshot read up to by the run that wrote the row"
+        tests: [not_null]
+
+  - name: silver_likes
+    description: "Like creations, one row per Jetstream event."
+    columns:
+      - name: seq
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: did
+        tests: [not_null]
+      - name: event_time
+        tests: [not_null]
+      - name: subject_uri
+        description: "AT URI of the liked record"
+        # Read from the client-written record: a warning, see assert_subject_uri_is_at_uri
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: subject_did
+        description: "Author of the liked record"
+      - name: bronze_snapshot_id
+        tests: [not_null]
+
+  - name: silver_reposts
+    description: "Repost creations, one row per Jetstream event."
+    columns:
+      - name: seq
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: did
+        tests: [not_null]
+      - name: event_time
+        tests: [not_null]
+      - name: subject_uri
+        description: "AT URI of the reposted record"
+        # Read from the client-written record: a warning, see assert_subject_uri_is_at_uri
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: bronze_snapshot_id
+        tests: [not_null]
+
+  - name: silver_follows
+    description: "Follow creations, one row per Jetstream event."
+    columns:
+      - name: seq
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: did
+        description: "Follower"
+        tests: [not_null]
+      - name: event_time
+        tests: [not_null]
+      - name: subject_did
+        description: "Followed account"
+        # Read from the client-written record: a warning, see assert_subject_uri_is_at_uri
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: bronze_snapshot_id
+        tests: [not_null]
+
+  - name: silver_deletes
+    description: "Deletions of the four collections, one row per Jetstream event (D18)."
+    columns:
+      - name: seq
+        tests:
+          - not_null
+          - unique:
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: did
+        tests: [not_null]
+      - name: collection
+        tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - app.bsky.feed.post
+                  - app.bsky.feed.like
+                  - app.bsky.feed.repost
+                  - app.bsky.graph.follow
+              config:
+                where: "processed_at >= now() - {{ var('test_window') }}"
+      - name: rkey
+        tests: [not_null]
+      - name: event_time
+        tests: [not_null]
+      - name: bronze_snapshot_id
+        tests: [not_null]

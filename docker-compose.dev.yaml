@@ -5,7 +5,15 @@
 #   - redpanda-console: web UI for topics and consumer groups (localhost:8088)
 #   - garage:           S3-compatible object storage, single node (localhost:3900)
 #                       bucket + access key auto-created from .env on first start
-#   - postgres:         DuckLake catalog + Dagster storage (localhost:5432)
+#   - postgres:         DuckLake catalog, Iceberg catalog, Dagster storage (localhost:5432)
+#   - lakekeeper:       Iceberg REST catalog of the Spark branch (localhost:8181), with its
+#                       one-shot migrate and init (bootstrap + warehouse on Garage)
+#   - spark:            the Spark branch's streaming job (profile `spark`: make spark)
+#   - iceberg-maintenance: the Spark branch's Iceberg maintenance, once (make iceberg-maintenance)
+#   - spark-thrift:     the Spark Thrift server of the Spark branch for dbt-spark (localhost:10000),
+#                       always up locally (make spark-thrift); in prod its supervisor
+#                       runs it on the Spark branch's days only
+#   - dbt-spark:        dbt build of the Spark branch against spark-thrift (make dbt-spark-build)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
 # Credentials come from .env (created from .env.example by `make up`), local only.
@@ -85,6 +93,175 @@ services:
       timeout: 5s
       retries: 20
 
+  # Iceberg REST catalog of the Spark branch (Postgres-backed), first migrated then initialised
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    command: ["migrate"]
+    environment: &lakekeeper-env
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${POSTGRES_USER:-streamhouse}:${POSTGRES_PASSWORD:-streamhouse}@postgres:5432/iceberg_catalog
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${POSTGRES_USER:-streamhouse}:${POSTGRES_PASSWORD:-streamhouse}@postgres:5432/iceberg_catalog
+      # Encrypts the storage credentials kept in the catalog database
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY:?set in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:v0.13.6
+    container_name: bsh-lakekeeper
+    command: ["serve"]
+    environment: *lakekeeper-env
+    ports:
+      - "127.0.0.1:8181:8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+
+  lakekeeper-init:
+    build:
+      context: .
+      dockerfile: docker/lakekeeper/Dockerfile
+    environment:
+      LAKEKEEPER_URL: http://lakekeeper:8181
+      ICEBERG_WAREHOUSE: bluesky
+      ICEBERG_KEY_PREFIX: iceberg
+      BUCKET: ${BUCKET:-bluesky-streamhouse}
+      # The endpoint Lakekeeper hands to its clients: containers of this network
+      S3_ENDPOINT_URL: http://garage:3900
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    restart: "no"
+
+  # Spark branch streaming job. Runs in the network because Lakekeeper hands out
+  # http://garage:3900, which the host cannot resolve
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    container_name: bsh-spark
+    profiles: ["spark"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      # Benchmark calendar (D28), read by the supervisor
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SPARK_DRIVER_MEMORY: 480m
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    volumes:
+      - spark-checkpoint:/app/state
+    # Same limits as prod: no swap for the JVM (D31)
+    mem_limit: 1g
+    memswap_limit: 1g
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
+  # Iceberg maintenance of the Spark branch, run once on demand (make iceberg-maintenance), with
+  # the image of the bluesky_spark code location; run history in the local Dagster db
+  iceberg-maintenance:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    profiles: ["spark"]
+    command: ["dagster", "job", "execute", "-m", "src.dagster.spark_definitions", "-j", "bluesky_iceberg_maintenance"]
+    environment:
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_THRIFT_HOST: spark-thrift
+      DAGSTER_POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
+      DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
+      DAGSTER_POSTGRES_HOST: postgres
+      DAGSTER_POSTGRES_DB: dagster
+      # Benchmark calendar (D28): completeness of the Spark branch's days
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+
+  # Spark Thrift server of the Spark branch (D6 revised), image of the bluesky_spark code location.
+  # Started directly, without the supervisor of prod (the local calendar rarely gives
+  # the day to the Spark branch). Port 10000 on 127.0.0.1: dbt can also run from the host
+  spark-thrift:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    container_name: bsh-spark-thrift
+    profiles: ["spark"]
+    command: [".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
+    environment:
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_THRIFT_DRIVER_MEMORY: 768m
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    ports:
+      - "127.0.0.1:10000:10000"
+    healthcheck:
+      test:
+        - CMD
+        - .venv/bin/python
+        - -c
+        - import socket; socket.create_connection(('localhost', 10000), 2)
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    # Same limits as prod (D31): no swap for the JVM
+    mem_limit: 1792m
+    memswap_limit: 1792m
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+
+  # Spark branch Silver/Gold with dbt-spark (make dbt-spark-build): the dbt process only, the
+  # project mounted from the working copy; the queries run in spark-thrift
+  dbt-spark:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    profiles: ["spark"]
+    working_dir: /tmp
+    entrypoint: ["/app/.venv/bin/dbt"]
+    command: ["build", "--project-dir", "/app/dbt/spark", "--profiles-dir", "/app/dbt/spark"]
+    environment:
+      SPARK_THRIFT_HOST: spark-thrift
+    volumes:
+      - ./dbt/spark:/app/dbt/spark
+    mem_limit: 512m
+    memswap_limit: 512m
+    depends_on:
+      spark-thrift:
+        condition: service_healthy
+
 configs:
   garage_toml:
     content: |
@@ -107,3 +284,4 @@ volumes:
   garage-meta:
   garage-data:
   postgres-data:
+  spark-checkpoint:

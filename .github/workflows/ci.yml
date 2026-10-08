@@ -23,6 +23,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-groups
 
+      # Spark parsing parity test (Spark branch): a local SparkSession needs a JVM, the
+      # same major version as the Spark image
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Lint with ruff
         run: uv run ruff check .
 
@@ -31,14 +39,22 @@ jobs:
 
       # Compiles every model, macro and test without a database (profile env defaults).
       # Before the tests: the Dagster definitions load the manifest it writes
-      - name: Parse dbt project (branch B)
+      - name: Parse dbt project (DuckDB branch)
         run: uv run dbt parse --project-dir dbt/duckdb --profiles-dir dbt/duckdb
+
+      - name: Parse dbt project (Spark branch)
+        run: uv run dbt parse --project-dir dbt/spark --profiles-dir dbt/spark
 
       - name: Run tests
         run: uv run pytest
 
-      - name: Validate Dagster definitions (branch B)
+      - name: Validate Dagster definitions (DuckDB branch)
         run: uv run dagster definitions validate -m src.dagster.definitions
+
+      - name: Validate Dagster definitions (Spark branch)
+        run: uv run dagster definitions validate -m src.dagster.spark_definitions
+        env:
+          DAGSTER_CODE_LOCATION: bluesky_spark
 
       - name: Check uv.lock is up to date
         run: uv lock --check

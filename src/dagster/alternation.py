@@ -6,8 +6,9 @@ status in Dagster's history. No business logic here: see `src.alternation`.
 - 07:00 Europe/Paris: open the day for its branch (the engine's supervisor starts it).
 - 19:00: close it on the Kafka high watermarks, which also start the next day.
 - Manual force from the launchpad: `action: force`, `day`, `branch`.
-- `day_completeness`: every offset of a finished day of branch B is in Bronze (launched
-  by the calendar sensor, src/dagster/sensors.py).
+- `ducklake_day_completeness`: every offset of a finished day of the DuckDB branch is in Bronze
+  (launched by the calendar sensor, src/dagster/sensors.py; the Spark branch has its own in
+  src/dagster/spark_alternation.py).
 """
 
 from datetime import UTC, date, datetime
@@ -30,7 +31,14 @@ from dagster import (
 from src import config as settings
 from src.alternation import calendar as cal
 from src.alternation import control
-from src.alternation.completeness import missing_offsets
+from src.alternation.completeness import offsets_query
+from src.dagster.completeness import (
+    CompletenessDay,
+    closed_day,
+    completeness_request,
+    completeness_result,
+)
+from src.processing.bronze import BRONZE_TABLE
 from src.resources.ducklake import connect
 
 GROUP = "alternation"
@@ -43,7 +51,7 @@ class CalendarAction(Config):
     action: str = OPEN
     # ISO date, e.g. 2026-10-08
     day: str | None = None
-    # Force only: A or B
+    # Force only: spark or duckdb
     branch: str | None = None
 
 
@@ -139,59 +147,33 @@ def close_day_schedule(context: ScheduleEvaluationContext) -> RunRequest:
     return _calendar_request(CLOSE)
 
 
-class CompletenessDay(Config):
-    """The finished day to check (ISO date)."""
-
-    day: str
-
-
 @asset(
-    key_prefix=[settings.DAGSTER_ASSET_PREFIX, GROUP],
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_DUCKDB, GROUP],
     group_name=GROUP,
-    description="Every Kafka offset of a finished day of branch B is in Bronze (D28).",
+    description="Every Kafka offset of a finished day of the DuckDB branch is in its DuckLake "
+    "Bronze (D28).",
 )
-def day_completeness(context: AssetExecutionContext, config: CompletenessDay) -> MaterializeResult:
+def ducklake_day_completeness(
+    context: AssetExecutionContext, config: CompletenessDay
+) -> MaterializeResult:
     """Count the day's offsets in Bronze; a missing one fails the run (alert)."""
-    conn = cal.connect_benchmark()
-    try:
-        day = cal.CalendarStore(conn).get(date.fromisoformat(config.day))
-    finally:
-        conn.close()
-    if day is None or day.end_offsets is None:
-        raise Failure(f"Day {config.day} is not closed", allow_retries=False)
+    day = closed_day(config.day)
+    table = f"{settings.DUCKLAKE_BRONZE_ALIAS}.main.{BRONZE_TABLE}"
     lake = connect(read_only=True)
     try:
-        missing = missing_offsets(lake, day)
+        found = dict(lake.execute(offsets_query(table, day)).fetchall())
     finally:
         lake.close()
-    metadata = {
-        "day": day.day.isoformat(),
-        "branch": day.effective_branch,
-        "messages": control.day_messages(day) or 0,
-        "missing": sum(missing.values()),
-        "missing_by_partition": {str(p): n for p, n in missing.items()},
-    }
-    if any(missing.values()):
-        raise Failure(
-            f"Day {day.day}: {sum(missing.values())} offsets of the day missing from Bronze "
-            f"({missing})",
-            metadata=metadata,
-            allow_retries=False,
-        )
-    context.log.info(f"Day {day.day}: all {metadata['messages']} offsets are in Bronze")
-    return MaterializeResult(metadata=metadata)
+    return completeness_result(context, day, found)
 
 
 completeness_job = define_asset_job(
-    name="bluesky_day_completeness",
-    selection=[day_completeness],
-    description="Every Kafka offset of a finished day of branch B is in Bronze (D28).",
+    name="bluesky_ducklake_day_completeness",
+    selection=[ducklake_day_completeness],
+    description="Every Kafka offset of a finished day of the DuckDB branch is in Bronze (D28).",
 )
 
 
-def completeness_request(day: date) -> RunRequest:
-    """One completeness run per day (the run key makes it once)."""
-    return RunRequest(
-        run_key=f"completeness:{day.isoformat()}",
-        run_config={"ops": {day_completeness.op.name: {"config": {"day": day.isoformat()}}}},
-    )
+def completeness_request_b(day: date) -> RunRequest:
+    """One completeness run per finished day of the DuckDB branch."""
+    return completeness_request(ducklake_day_completeness.op.name, cal.BRANCH_DUCKDB, day)

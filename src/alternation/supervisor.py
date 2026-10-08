@@ -2,7 +2,7 @@
 Supervisor of an engine container (decision D28): the container's entry point, it runs
 the engine as a subprocess only while the calendar gives a day to its branch.
 
-    python -m src.alternation.supervisor B -- python -m src.processing.quix.app
+    python -m src.alternation.supervisor duckdb -- python -m src.processing.quix.app
 
 Every SUPERVISOR_POLL_SECONDS it reads the calendar (it never writes a decision):
 - a day open or closing for its branch and no engine running: start it, with
@@ -17,6 +17,15 @@ Every SUPERVISOR_POLL_SECONDS it reads the calendar (it never writes a decision)
 It never starts an engine without a confirmed row, and keeps the current state when
 Postgres is unreachable. SIGTERM (redeploy, container stop) is passed to the engine,
 which flushes and commits before exiting; the day goes on after the restart.
+
+Service mode (`--service`) supervises a service of the branch rather than its engine,
+e.g. the Spark branch's Thrift server: it runs while the branch owns the latest opened
+day, from
+that opening until the next one (Silver/Gold tail, nightly maintenance and tests
+included), with no day of its own and no late mark or hard stop.
+
+    python -m src.alternation.supervisor spark --service -- \
+        python -m src.processing.spark.thrift_server
 """
 
 import os
@@ -152,12 +161,47 @@ class Supervisor:
         self.stop()
 
 
+class ServiceSupervisor(Supervisor):
+    """Runs a service of the branch while the branch owns the latest opened day."""
+
+    def start(self, day: cal.CalendarDay | None = None) -> None:
+        logger.info(f"Branch {self.branch} owns the latest opened day: starting the service")
+        self.process = subprocess.Popen(self.command)
+
+    def tick(self) -> None:
+        if self.process is not None and not self.running():
+            logger.warning(f"Service exited with code {self.process.returncode}")
+            self.process = None
+            self._exited_at = self._monotonic()
+        try:
+            owner = self._calendar().owner()
+        except Exception as e:  # noqa: BLE001 - keep the current state, retry next tick
+            self._store = None
+            logger.warning(f"Calendar unreachable ({e}), keeping the current state")
+            return
+        if self.running():
+            if owner != self.branch:
+                logger.info(f"Branch {owner} owns the latest opened day: stopping the service")
+                self.stop()
+                self.process = None
+            return
+        if owner == self.branch and self._monotonic() - self._exited_at >= self._restart_delay:
+            self.start()
+
+
+USAGE = "usage: python -m src.alternation.supervisor <spark|duckdb> [--service] -- <command...>"
+
+
 def main(argv: list[str] | None = None) -> None:
-    """`supervisor <branch> -- <engine command...>`."""
+    """`supervisor <branch> [--service] -- <command...>`."""
     args = sys.argv[1:] if argv is None else argv
+    service = len(args) > 1 and args[1] == "--service"
+    if service:
+        args = [args[0], *args[2:]]
     if len(args) < 3 or args[1] != "--":
-        raise SystemExit("usage: python -m src.alternation.supervisor <A|B> -- <command...>")
-    Supervisor(args[0], args[2:], store=lambda: cal.CalendarStore(cal.connect_benchmark())).run()
+        raise SystemExit(USAGE)
+    kind = ServiceSupervisor if service else Supervisor
+    kind(args[0], args[2:], store=lambda: cal.CalendarStore(cal.connect_benchmark())).run()
 
 
 if __name__ == "__main__":

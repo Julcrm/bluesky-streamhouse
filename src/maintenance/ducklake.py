@@ -1,5 +1,5 @@
 """
-DuckLake maintenance of branch B (decision D21), run nightly by Dagster: retention
+DuckLake maintenance of the DuckDB branch (decision D21), run nightly by Dagster: retention
 DELETE (D14), then the native CHECKPOINT of each catalog (one per writer, D22), which
 flushes inlined rows, merges small files, expires snapshots and removes old and orphan
 files in one command (Iceberg needs 3-4 procedures for the same: a benchmark result).
@@ -18,8 +18,7 @@ import s3fs
 from src import config
 from src.resources.ducklake import DuckLakeSettings, connect
 
-# Column a table's retention is measured on, by order of preference
-TIME_COLUMNS = ("event_time", "minute", "hour")
+TIME_COLUMNS = config.RETENTION_TIME_COLUMNS
 PROGRESS_TABLE = "meta.silver_progress"
 
 

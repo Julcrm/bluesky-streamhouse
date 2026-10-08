@@ -1,7 +1,7 @@
 # =============================================================================
-# Quix Streams app — Bluesky Streamhouse, branch B
+# Quix Streams app — Bluesky Streamhouse, the DuckDB branch
 # Consumes Redpanda `raw_events` and writes the DuckLake Bronze table
-# (Postgres catalog, Parquet files on Garage), on branch B's days only (D28).
+# (Postgres catalog, Parquet files on Garage), on the DuckDB branch's days only (D28).
 # Runtime: Python 3.12-slim, uv, quixstreams, duckdb, pyarrow (quix group only)
 # =============================================================================
 
@@ -33,8 +33,8 @@ USER appuser
 RUN .venv/bin/python -c "import duckdb; from src.resources.ducklake import EXTENSIONS; \
 [duckdb.execute(f'INSTALL {ext}') for ext in EXTENSIONS]"
 
-# The supervisor (decision D28) is PID 1: it runs the Quix app only on branch B's days
+# The supervisor (decision D28) is PID 1: it runs the Quix app only on the DuckDB branch's days
 # and passes SIGTERM to it, so Quix flushes the last checkpoint and commits its offsets
 # before exiting. Exec form, no shell in between
-CMD [".venv/bin/python", "-m", "src.alternation.supervisor", "B", "--", \
+CMD [".venv/bin/python", "-m", "src.alternation.supervisor", "duckdb", "--", \
      ".venv/bin/python", "-m", "src.processing.quix.app"]

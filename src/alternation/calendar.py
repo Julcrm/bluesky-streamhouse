@@ -17,7 +17,8 @@ Status of a day:
     closing   19:00: end offsets known, the engine stops once it has written them all
     done      the engine stopped after its end offsets
     incomplete stopped at the 06:30 hard stop the next morning (messages missing)
-    skipped   nobody ran it (branch not deployed yet, e.g. A while B runs alone)
+    skipped   nobody ran it (branch not deployed yet, e.g. the Spark branch while the
+              DuckDB branch ran alone)
 
 A day whose engine was still running at 19:30 gets `late_at`: it may finish during the
 night (no engine runs then) and stays in the benchmark, marked.
@@ -35,9 +36,11 @@ import psycopg2.extras
 
 from src import config
 
-BRANCH_A = "A"
-BRANCH_B = "B"
-BRANCHES = (BRANCH_A, BRANCH_B)
+BRANCH_SPARK = "spark"
+BRANCH_DUCKDB = "duckdb"
+BRANCHES = (BRANCH_SPARK, BRANCH_DUCKDB)
+# Values stored before the branches were named after their engine (2026-10-08)
+LEGACY_BRANCHES = {"A": BRANCH_SPARK, "B": BRANCH_DUCKDB}
 
 PENDING, OPEN, CLOSING = "pending", "open", "closing"
 DONE, INCOMPLETE, SKIPPED = "done", "incomplete", "skipped"
@@ -53,8 +56,8 @@ TIMEZONE = ZoneInfo(config.ALTERNATION_TIMEZONE)
 DDL = f"""
 CREATE TABLE IF NOT EXISTS branch_calendar (
     day             DATE PRIMARY KEY,
-    branch          CHAR(1) NOT NULL CHECK (branch IN ('A', 'B')),
-    forced_branch   CHAR(1) CHECK (forced_branch IN ('A', 'B')),
+    branch          TEXT NOT NULL CHECK (branch IN ('{BRANCH_SPARK}', '{BRANCH_DUCKDB}')),
+    forced_branch   TEXT CHECK (forced_branch IN ('{BRANCH_SPARK}', '{BRANCH_DUCKDB}')),
     start_offsets   JSONB NOT NULL,
     end_offsets     JSONB,
     -- 'watermark' (read at 19:00) or 'timestamp' (fallback: offsets_for_times)
@@ -70,6 +73,26 @@ CREATE TABLE IF NOT EXISTS branch_calendar (
     note            TEXT
 )
 """
+
+
+# Branches named after their engine (2026-10-08): CHAR(1) 'A'/'B' become TEXT
+# 'spark'/'duckdb', in the same transaction as the table check. Idempotent: the UPDATE
+# matches no row once done, the constraints are dropped and added again
+MIGRATE_BRANCH_NAMES = [
+    "ALTER TABLE branch_calendar DROP CONSTRAINT IF EXISTS branch_calendar_branch_check",
+    "ALTER TABLE branch_calendar DROP CONSTRAINT IF EXISTS branch_calendar_forced_branch_check",
+    "ALTER TABLE branch_calendar ALTER COLUMN branch TYPE TEXT, "
+    "ALTER COLUMN forced_branch TYPE TEXT",
+    *(
+        f"UPDATE branch_calendar SET {column} = '{new}' WHERE {column} = '{old}'"
+        for column in ("branch", "forced_branch")
+        for old, new in LEGACY_BRANCHES.items()
+    ),
+    "ALTER TABLE branch_calendar ADD CONSTRAINT branch_calendar_branch_check "
+    f"CHECK (branch IN ('{BRANCH_SPARK}', '{BRANCH_DUCKDB}'))",
+    "ALTER TABLE branch_calendar ADD CONSTRAINT branch_calendar_forced_branch_check "
+    f"CHECK (forced_branch IN ('{BRANCH_SPARK}', '{BRANCH_DUCKDB}'))",
+]
 
 
 class CalendarError(Exception):
@@ -105,11 +128,12 @@ class CalendarDay:
 
 
 def branch_for(day: date, start: date | None = None) -> str:
-    """Branch of a benchmark day by rotation (D1): B on the start date, then A, B, ..."""
+    """Branch of a benchmark day by rotation (D1): DuckDB on the start date, then Spark,
+    DuckDB, ..."""
     start = start or config.ALTERNATION_START_DATE
     if day < start:
         raise CalendarError(f"{day} is before the alternation start date {start}")
-    return BRANCH_B if (day - start).days % 2 == 0 else BRANCH_A
+    return BRANCH_DUCKDB if (day - start).days % 2 == 0 else BRANCH_SPARK
 
 
 def _local_time(value: str) -> time:
@@ -191,9 +215,15 @@ def connect_benchmark(dbname: str | None = None):
 
 
 def _row(record: dict) -> CalendarDay:
+    # Rows still holding 'A'/'B' (deploy before the next ensure_table) read the same
+    legacy = {
+        column: LEGACY_BRANCHES.get(record[column], record[column])
+        for column in ("branch", "forced_branch")
+    }
     return CalendarDay(
         **{
             **record,
+            **legacy,
             "start_offsets": offsets_from_json(record["start_offsets"]),
             "end_offsets": offsets_from_json(record["end_offsets"]),
         }
@@ -217,6 +247,8 @@ class CalendarStore:
             cur.execute(DDL)
             # Tables created before the late mark (2026-10-06)
             cur.execute("ALTER TABLE branch_calendar ADD COLUMN IF NOT EXISTS late_at TIMESTAMPTZ")
+            for statement in MIGRATE_BRANCH_NAMES:
+                cur.execute(statement)
 
     def get(self, day: date) -> CalendarDay | None:
         with self._transaction() as cur:
@@ -243,6 +275,17 @@ class CalendarStore:
         """The day the engine of `branch` must work on now, if any (supervisor)."""
         days = [d for d in self.running_days() if d.effective_branch == branch]
         return days[0] if days else None
+
+    def owner(self) -> str | None:
+        """Branch of the latest opened day: it owns the VPS until the next opening, night
+        included (supervised services, such as the Spark branch's Thrift server)."""
+        with self._transaction() as cur:
+            cur.execute(
+                "SELECT * FROM branch_calendar WHERE opened_at IS NOT NULL "
+                "ORDER BY day DESC LIMIT 1"
+            )
+            record = cur.fetchone()
+        return _row(record).effective_branch if record else None
 
     # Decisions: Dagster only
 

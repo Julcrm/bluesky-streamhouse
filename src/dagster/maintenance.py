@@ -1,15 +1,15 @@
 """
-Nightly maintenance of branch B (decisions D14, D21), as assets so that every run keeps
+Nightly maintenance of the DuckDB branch (decisions D14, D21), as assets so that every run keeps
 its before/after figures in Dagster: files, bytes and snapshots over time are benchmark
 data (drift, H8). No business logic here: everything is in `src.maintenance.ducklake`.
 
 Order (one step at a time): guard, retention DELETE and CHECKPOINT of each catalog (one
-does not wait for the other), storage checks, then the purge of old Dagster runs.
+does not wait for the other), storage checks; the housekeeping (old Dagster runs, dbt
+run folders) runs whatever they give.
 """
 
 import time
 from contextlib import nullcontext
-from datetime import UTC, datetime, timedelta
 
 from dagster import (
     AssetCheckResult,
@@ -17,29 +17,24 @@ from dagster import (
     AssetCheckSpec,
     AssetExecutionContext,
     AssetKey,
-    DagsterRunStatus,
     Failure,
     MaterializeResult,
-    RunsFilter,
     asset,
 )
 
 from src import config
-from src.dagster.runs import in_location, wait_for_runs
+from src.dagster.assets import dbt_project
+from src.dagster.housekeeping import housekeeping_asset
+from src.dagster.runs import wait_for_runs
 from src.maintenance import ducklake as maintenance
 from src.processing.backlog import GOLD_SCHEMA, gold_positions, silver_positions
 from src.resources.bronze_lock import exclusive_bronze_lock
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
 
 GROUP = "maintenance"
-KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, GROUP]
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_DUCKDB, GROUP]
 LAKE_STORAGE_KEY = AssetKey([*KEY_PREFIX, "lake_storage"])
 SILVER_GOLD_JOB = "bluesky_silver_gold"
-FINISHED_RUN_STATUSES = [
-    DagsterRunStatus.SUCCESS,
-    DagsterRunStatus.FAILURE,
-    DagsterRunStatus.CANCELED,
-]
 
 
 def _wait_for_silver_gold(context: AssetExecutionContext) -> None:
@@ -205,22 +200,9 @@ def lake_storage(context: AssetExecutionContext) -> MaterializeResult:
     )
 
 
-@asset(
-    group_name=GROUP,
-    key_prefix=KEY_PREFIX,
-    deps=[lake_storage],
-    description="Delete finished Dagster runs of this code location older than 30 days (D20).",
+housekeeping = housekeeping_asset(
+    KEY_PREFIX, GROUP, dbt_project.project_dir / dbt_project.target_path
 )
-def dagster_run_purge(context: AssetExecutionContext) -> MaterializeResult:
-    cutoff = datetime.now(UTC) - timedelta(days=config.DAGSTER_RUN_RETENTION_DAYS)
-    records = context.instance.get_run_records(
-        RunsFilter(statuses=FINISHED_RUN_STATUSES, created_before=cutoff)
-    )
-    # Never another project's runs: the instance is shared with velib
-    ours = [r.dagster_run.run_id for r in records if in_location(r.dagster_run)]
-    for run_id in ours:
-        context.instance.delete_run(run_id)
-    return MaterializeResult(metadata={"runs_deleted": len(ours), "cutoff": cutoff.isoformat()})
 
 
-maintenance_assets = [bronze_maintenance, transform_maintenance, lake_storage, dagster_run_purge]
+maintenance_assets = [bronze_maintenance, transform_maintenance, lake_storage, housekeeping]

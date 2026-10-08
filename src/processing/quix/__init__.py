@@ -1,1 +1,1 @@
-"""Branch B — Quix Streams application writing to DuckLake."""
+"""DuckDB branch — Quix Streams application writing to DuckLake."""

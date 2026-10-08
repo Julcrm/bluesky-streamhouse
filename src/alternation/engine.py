@@ -126,13 +126,18 @@ class EngineDay:
             self._last_read = float("-inf")
             self.refresh()
 
-    def in_bounds(self, partition: int, offset: int) -> bool:
-        """True for a message of the day: before its end. From 19:00 until the end
-        offsets are known, waits for them instead of guessing."""
+    def bounds(self) -> cal.Offsets | None:
+        """End offsets to apply now: None before 19:00 while unknown (nothing to drop
+        yet); from 19:00, waits for them instead of guessing."""
         self.refresh()
         if self.end is None and self._now() >= self.close_at:
             self.wait_for_end()
-        return self.end is None or offset < self.end.get(partition, 0)
+        return self.end
+
+    def in_bounds(self, partition: int, offset: int) -> bool:
+        """True for a message of the day: before its end (see `bounds`)."""
+        end = self.bounds()
+        return end is None or offset < end.get(partition, 0)
 
     def record_commit(self, newest_event: datetime | None) -> None:
         """After a commit: caught up once the newest event is recent enough."""

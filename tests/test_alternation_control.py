@@ -31,7 +31,7 @@ def test_eve_of_the_start_creates_the_first_day_on_exact_offsets(store) -> None:
     assert control.close_day(store, eve, watermarks=lambda: {0: 7, 1: 8, 2: 9}) is None
     first = store.get(START)
     assert (first.branch, first.start_offsets, first.offsets_source) == (
-        "B",
+        "duckdb",
         {0: 7, 1: 8, 2: 9},
         "watermark",
     )
@@ -103,7 +103,7 @@ def test_calendar_asset_end_to_end(store, monkeypatch) -> None:  # noqa: F811
     assert result.success
     first = store.get(today + timedelta(days=1))
     watermarks = redpanda.high_watermarks()
-    assert first.branch == "B"
+    assert first.branch == "duckdb"
     assert all(first.start_offsets[p] <= watermarks[p] for p in watermarks)
 
     job = defs.get_job_def(calendar_job.name)

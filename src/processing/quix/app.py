@@ -1,11 +1,11 @@
 """
-Branch B streaming application.
+DuckDB branch streaming application.
 Consumes `raw_events` and writes micro-batches to the DuckLake Bronze table on Garage (S3).
 
 Delivery is at-least-once: Quix commits Kafka offsets only after the sink flush of a
 checkpoint succeeds. All partitions of a checkpoint go in a single INSERT, so each
 checkpoint (every QUIX_COMMIT_INTERVAL_SECONDS) is exactly one DuckLake snapshot, the
-same cadence as Spark's 5 s trigger in branch A.
+same cadence as Spark's 5 s trigger in the Spark branch.
 
 Live checkpoints are inlined in the Postgres catalog and flushed to Parquet every few
 minutes by the sink itself (decision D15). Rows still inlined when the app stops are
@@ -261,7 +261,7 @@ class DuckLakeBronzeSink(BatchingSink):
 
 
 def build_app() -> Application:
-    """Quix application on `raw_events`, with the branch B consumer group."""
+    """Quix application on `raw_events`, with the DuckDB branch consumer group."""
     return Application(
         broker_address=config.KAFKA_BOOTSTRAP_SERVERS,
         consumer_group=config.QUIX_CONSUMER_GROUP,

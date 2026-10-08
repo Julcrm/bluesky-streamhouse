@@ -1,5 +1,5 @@
-# Branch B (Quix Streams -> DuckLake): Silver and Gold models run by dbt-duckdb.
-# Branch A (dbt/spark) exposes the same model names and columns (benchmark contract).
+# DuckDB branch (Quix Streams -> DuckLake): Silver and Gold models run by dbt-duckdb.
+# Spark branch (dbt/spark) exposes the same model names and columns (benchmark contract).
 name: bluesky_duckdb
 version: 1.0.0
 profile: bluesky_duckdb

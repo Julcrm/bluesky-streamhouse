@@ -1,7 +1,7 @@
 """
 Bronze contract shared by both branches: one row per Jetstream commit event.
 
-Branch A (Spark → Iceberg) and branch B (Quix → DuckLake) must write the exact same
+Spark branch (Spark → Iceberg) and the DuckDB branch (Quix → DuckLake) must write the exact same
 columns, so the schema lives here once. Bronze is append-only: duplicates from producer
 resumes or consumer replays are expected and removed in Silver on `seq`.
 
@@ -35,7 +35,7 @@ BRONZE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 BRONZE_COLUMN_NAMES = tuple(name for name, _, _ in BRONZE_COLUMNS)
 
 # Files split by event day, so retention DELETEs drop whole files (decision D14).
-# Branch A uses the Iceberg equivalent, days(event_time)
+# Spark branch uses the Iceberg equivalent, days(event_time)
 BRONZE_PARTITION_BY = ("year(event_time)", "month(event_time)", "day(event_time)")
 
 
