@@ -1,6 +1,6 @@
 """
 Dagster sensors of branch B, alerts by email (Resend, as velib, src/dagster/alerts.py):
-- a run fails. A failed blocking storage check (80 GB bucket, 2 GB catalog) fails the
+- a run fails. A failed blocking storage check (90 GB bucket, 2 GB catalog) fails the
   maintenance run, so it alerts the same way (D14, D21);
 - the calendar shows a failed day (D28): engine not started, day not closed, day late
   (19:30), incomplete (06:30 hard stop), hard stop not applied. The same sensor

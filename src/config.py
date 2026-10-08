@@ -164,8 +164,10 @@ MAINTENANCE_WAIT_FOR_RUN_SECONDS = 30 * 60
 # expired before Silver or Gold read them, so the maintenance stops instead
 READ_POSITION_MAX_AGE_HOURS = 24
 # Alerts (D14, D21): whole bucket (orphans and pending deletions included), and the
-# Postgres database holding both catalogs
-BUCKET_ALERT_BYTES = 80 * 10**9
+# Postgres database holding both catalogs. A day dropped by the retention stays two
+# nights in the bucket (expired the next night, deleted the night after), so the bucket
+# runs ~30 GB above the live data: 90 GB leaves room for Redpanda in the 100 GB budget
+BUCKET_ALERT_BYTES = 90 * 10**9
 CATALOG_ALERT_BYTES = 2 * 10**9
 # Dagster runs of this code location only: the instance is shared with velib (D20)
 DAGSTER_RUN_RETENTION_DAYS = 30
