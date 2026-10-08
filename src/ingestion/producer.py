@@ -23,6 +23,7 @@ from confluent_kafka.admin import AdminClient, NewTopic
 from loguru import logger
 
 from src import config
+from src.healthcheck import touch
 
 # --- Pure helpers (unit-tested) ---
 
@@ -224,6 +225,8 @@ class JetstreamIngestor:
         if elapsed < config.PRODUCER_STATS_INTERVAL_SECONDS:
             return
         rate = self.stats_messages / elapsed
+        if self.stats_messages:  # events flowed: healthy (Jetstream never goes quiet)
+            touch(config.HEARTBEAT_FILE)
         logger.info(
             f"{rate:.0f} msg/s | {self.stats_bytes / elapsed / 1024:.0f} KiB/s | "
             f"lag {self.stats_lag_s:.1f}s | last acked seq {self.last_acked_seq} | "

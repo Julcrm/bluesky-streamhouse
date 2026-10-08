@@ -206,6 +206,9 @@ ALTERNATION_START_DATE = date(2026, 10, 7)
 BENCHMARK_DB = os.getenv("BENCHMARK_DB", "bluesky_benchmark")
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
+# Heartbeat of the supervisors and the producer, read by the container healthchecks
+# (src/healthcheck.py): written at each loop, healthy while younger than 4 loops
+HEARTBEAT_FILE = os.getenv("HEARTBEAT_FILE", "/tmp/heartbeat")
 # A crashed engine is restarted after this long (same day, from its last commit)
 SUPERVISOR_RESTART_DELAY_SECONDS = 30
 # Engines read their day's bounds this often while running (end offsets appear at 19:00)
