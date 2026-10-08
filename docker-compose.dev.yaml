@@ -167,6 +167,7 @@ services:
       MALLOC_ARENA_MAX: "2"
     volumes:
       - spark-checkpoint:/app/state
+    # Same limits as prod: no swap for the JVM (D31)
     mem_limit: 1g
     memswap_limit: 1g
     depends_on:
