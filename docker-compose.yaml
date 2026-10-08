@@ -32,10 +32,21 @@ services:
       - JETSTREAM_MAX_REPLAY_MINUTES=${JETSTREAM_MAX_REPLAY_MINUTES:-60}
     # Leaves time for the SIGTERM flush of in-flight messages
     stop_grace_period: 30s
+    # Heartbeat written at each loop (src/healthcheck.py): stale after 4 loops of 30 s
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "heartbeat", "/tmp/heartbeat", "120"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
           memory: 256M  # measured ~37 MiB steady, <110 MiB with a full send queue
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 128M
     networks:
       - coolify
     restart: always
@@ -65,6 +76,13 @@ services:
       - BUCKET=${BUCKET:-bluesky-streamhouse}
     # Leaves time for the last checkpoint flush and offset commit on SIGTERM
     stop_grace_period: 30s
+    # Heartbeat written at each loop (src/healthcheck.py): stale after 4 loops of 30 s
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "heartbeat", "/tmp/heartbeat", "120"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -72,6 +90,10 @@ services:
           # rising in its first prod catch-up without swap (2026-10-08), 1 GB left no margin.
           # Quix: ~250 MiB live, ~700 MiB in the 35 M-row catch-up of 2026-09-28
           memory: 1280M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 768M
     networks:
       - coolify
     restart: always
@@ -114,12 +136,25 @@ services:
     # A run in progress is interrupted on redeploy; the next schedule tick resumes
     # from the last Bronze snapshot Silver read (incremental by snapshot, D16)
     stop_grace_period: 30s
+    # The gRPC port accepts connections (src/healthcheck.py): a plain socket, not
+    # `dagster api grpc-health-check`, which would load Dagster every 30 s in a measured
+    # container
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "tcp", "4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
           # The DuckDB branch's 2.5 GB transform budget (D31). Swap: Docker's default (as much
           # as the RAM limit), measured in phase 7 like the RAM
           memory: 2560M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 2G
     networks:
       - coolify
     restart: always
@@ -159,6 +194,10 @@ services:
       resources:
         limits:
           memory: 256M  # ~30 MiB measured
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 128M
     networks:
       - coolify
     restart: always
@@ -208,11 +247,22 @@ services:
     volumes:
       - spark-checkpoint:/app/state
     stop_grace_period: 30s
+    # Heartbeat written at each loop (src/healthcheck.py): stale after 4 loops of 30 s
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "heartbeat", "/tmp/heartbeat", "120"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
           # D27, same as Quix: 951 MiB real and rising in the first prod catch-up (08/10)
           memory: 1280M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 1G
     # No swap for the JVM (D31, as spark-thrift): a swapped-out heap would stall the
     # 5-second micro-batches and inflate the end-to-end latency measured (H4)
     memswap_limit: 1280M
@@ -249,6 +299,15 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ALERT_EMAIL=${ALERT_EMAIL}
     stop_grace_period: 30s
+    # The gRPC port accepts connections (src/healthcheck.py): a plain socket, not
+    # `dagster api grpc-health-check`, which would load Dagster every 30 s in a measured
+    # container
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "tcp", "4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -259,6 +318,10 @@ services:
           # are ceilings, reported as context; the benchmark compares the measured
           # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
           memory: 1536M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 768M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
@@ -291,10 +354,21 @@ services:
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
     stop_grace_period: 30s
+    # Heartbeat written at each loop (src/healthcheck.py): stale after 4 loops of 30 s
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-m", "src.healthcheck", "heartbeat", "/tmp/heartbeat", "120"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
           memory: 1792M  # anon peak 1,356 MiB, full catch-up + dbt build (2026-10-08)
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 1536M
     # No swap for the JVM (D31): garbage collections walk the whole heap, a swapped-out
     # heap would stall every pass
     memswap_limit: 1792M
