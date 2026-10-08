@@ -49,7 +49,8 @@ dagster = [
     "s3fs",
 ]
 benchmark = [
-    "docker>=7",
+    # bench-collector (D34): samples go to the benchmark database
+    "psycopg2-binary>=2.9",
 ]
 api = [
     "fastapi",
