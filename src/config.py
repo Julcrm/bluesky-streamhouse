@@ -216,8 +216,8 @@ CAUGHT_UP_LAG_SECONDS = 10
 # Bronze commits of the day still have to reach Gold
 TRANSFORM_TAIL_SECONDS = 60 * 60
 # Branches whose engine is deployed: days of another branch are skipped without alert
-# (B runs alone first, D28). Becomes ("A", "B") when branch A is deployed
-DEPLOYED_BRANCHES = ("B",)
+# (B ran alone first, D28; A deployed on a day of B, its first day the next one)
+DEPLOYED_BRANCHES = ("A", "B")
 # Calendar alerts (email), each once per day: engine not started this long after the
 # opening, day still open this long after the close (never closed), day still running
 # this long after the hard stop (the supervisor did not act)
