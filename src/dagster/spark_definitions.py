@@ -221,6 +221,76 @@ def iceberg_maintenance_schedule(context: ScheduleEvaluationContext) -> RunReque
     return RunRequest()
 
 
+@asset(
+    name="iceberg_hourly_compaction",
+    key_prefix=[config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK, GROUP],
+    group_name=GROUP,
+    description="Hourly compaction of the Bronze table on Spark days (D33): today's small "
+    "files and the manifests of the 5-second commits, so that incremental Silver reads "
+    "stay fast. Snapshot expiration and retention stay nightly.",
+)
+def iceberg_hourly_compaction(context: AssetExecutionContext) -> MaterializeResult:
+    """rewrite_data_files on today's partition, then rewrite_manifests, through the Thrift
+    server. Waits for a Silver/Gold run in progress (D30); its cost is a benchmark result
+    (H6), the slowdown without it was one (H8)."""
+    wait_for_runs(
+        context.instance, context.log, context.run_id, None, config.SPARK_RUN_WAIT_SECONDS
+    )
+    sql = thrift.records
+    before = iceberg.table_stats(sql, BRONZE)
+    started = time.monotonic()
+    rewritten = iceberg.rewrite_data_files(sql, BRONZE, iceberg.today_filter("event_time"))
+    files_seconds = round(time.monotonic() - started, 1)
+    started = time.monotonic()
+    manifests = iceberg.rewrite_manifests(sql, BRONZE)
+    manifests_seconds = round(time.monotonic() - started, 1)
+    after = iceberg.table_stats(sql, BRONZE)
+    context.log.info(
+        f"Bronze: {before.data_files} -> {after.data_files} files, "
+        f"{before.manifests} -> {after.manifests} manifests"
+    )
+    return MaterializeResult(
+        metadata={
+            **{f"before_{k}": v for k, v in before.as_dict().items()},
+            **{f"after_{k}": v for k, v in after.as_dict().items()},
+            "rewrite_data_files_seconds": files_seconds,
+            "rewrite_manifests_seconds": manifests_seconds,
+            "rewrite_data_files": rewritten,
+            "rewrite_manifests": manifests,
+        }
+    )
+
+
+iceberg_compaction_job = define_asset_job(
+    name="bluesky_iceberg_hourly_compaction",
+    selection=AssetSelection.assets(iceberg_hourly_compaction),
+    description="Hourly compaction of the Spark branch's Bronze table on its days (D33).",
+)
+
+
+@schedule(
+    job=iceberg_compaction_job,
+    cron_schedule=config.ICEBERG_HOURLY_COMPACTION_CRON,
+    execution_timezone=config.DAGSTER_TIMEZONE,
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def iceberg_compaction_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
+    """Every hour at :50 while the Spark branch's Silver/Gold is due (its engine runs, or
+    stopped less than an hour ago): the Thrift server is up then. One at a time."""
+    days = monitor.recent_days()
+    due = monitor.transform_due(days, cal.BRANCH_SPARK, datetime.now(UTC)) if days else None
+    if due is None:
+        return SkipReason("No day of the Spark branch running or just finished")
+    previous = [
+        run
+        for run in active_location_runs(context.instance, iceberg_compaction_job.name)
+        if run.job_name == iceberg_compaction_job.name
+    ]
+    if previous:
+        return SkipReason(f"Compaction run {previous[0].run_id} still in progress")
+    return RunRequest(tags={"bluesky/transform_due": due})
+
+
 spark_silver_gold_job = define_asset_job(
     name="bluesky_spark_silver_gold",
     selection=AssetSelection.keys(spark_bronze.key) | AssetSelection.assets(spark_dbt_models),
@@ -287,18 +357,21 @@ defs = Definitions(
         iceberg_bronze_maintenance,
         iceberg_transform_maintenance,
         housekeeping,
+        iceberg_hourly_compaction,
         iceberg_day_completeness,
     ],
     jobs=[
         spark_silver_gold_job,
         spark_nightly_checks_job,
         iceberg_maintenance_job,
+        iceberg_compaction_job,
         iceberg_completeness_job,
     ],
     schedules=[
         spark_silver_gold_schedule,
         spark_nightly_checks_schedule,
         iceberg_maintenance_schedule,
+        iceberg_compaction_schedule,
     ],
     sensors=[
         failure_alert_sensor(
@@ -307,6 +380,7 @@ defs = Definitions(
                 spark_silver_gold_job,
                 spark_nightly_checks_job,
                 iceberg_maintenance_job,
+                iceberg_compaction_job,
                 iceberg_completeness_job,
             ],
         ),
