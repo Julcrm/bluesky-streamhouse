@@ -310,3 +310,26 @@ def test_unreachable_calendar_keeps_the_service_state(service) -> None:
 def test_cli_rejects_a_command_without_separator() -> None:
     with pytest.raises(SystemExit):
         main(["spark", "--service", "python"])
+
+
+def test_supervisor_loop_writes_its_heartbeat(monkeypatch, tmp_path) -> None:
+    """The container healthcheck reads this file: written at each loop, whatever the
+    calendar says (an engine stopped on the other branch's days is healthy)."""
+    import os
+    import signal as signals
+
+    from src import config
+    from src.alternation.supervisor import Supervisor
+
+    beat = tmp_path / "heartbeat"
+    monkeypatch.setattr(config, "HEARTBEAT_FILE", str(beat))
+    supervisor = Supervisor("duckdb", SLEEPER, store=lambda: None)
+    # One tick, then the stop signal the loop handles (as a container stop)
+    monkeypatch.setattr(supervisor, "tick", lambda: os.kill(os.getpid(), signals.SIGTERM))
+    handlers = {sig: signals.getsignal(sig) for sig in (signals.SIGTERM, signals.SIGINT)}
+    try:
+        supervisor.run(poll_seconds=0)
+    finally:
+        for sig, handler in handlers.items():
+            signals.signal(sig, handler)
+    assert beat.exists()

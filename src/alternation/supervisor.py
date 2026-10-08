@@ -41,6 +41,7 @@ from loguru import logger
 from src import config
 from src.alternation import calendar as cal
 from src.alternation.engine import DAY_ENV
+from src.healthcheck import touch
 
 # Time the engine gets to flush and commit after SIGTERM (compose stop_grace_period: 30 s)
 STOP_TIMEOUT_SECONDS = 25
@@ -154,6 +155,9 @@ class Supervisor:
         logger.info(f"Supervisor of branch {self.branch}: {' '.join(self.command)}")
         while not stopping:
             self.tick()
+            # Alive and polling, whatever the calendar says (an engine stopped on the
+            # other branch's days is the normal state, not a failure)
+            touch(config.HEARTBEAT_FILE)
             deadline = self._monotonic() + poll_seconds
             while not stopping and self._monotonic() < deadline:
                 time.sleep(1)

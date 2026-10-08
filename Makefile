@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format pre-commit up down reset logs ps produce quix spark spark-thrift iceberg-maintenance dbt-spark-build dbt-build dbt-parse dagster clean
+.PHONY: check_uv install add add-dev test lint format up down reset logs ps produce quix spark spark-thrift iceberg-maintenance dbt-spark-build dbt-build dbt-parse dagster clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -29,9 +29,6 @@ lint: check_uv
 
 format: check_uv
 	uv run ruff format .
-
-pre-commit: check_uv
-	uv run pre-commit install
 
 # --- Local stack (Redpanda, Garage, Postgres) ---
 
