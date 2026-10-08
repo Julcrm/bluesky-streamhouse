@@ -208,9 +208,10 @@ def _call(sql: Sql, procedure: str, arguments: str) -> dict[str, Any]:
     return rows[0] if rows else {}
 
 
-def rewrite_data_files(sql: Sql, table: str) -> dict[str, Any]:
+def rewrite_data_files(sql: Sql, table: str, where: str | None = None) -> dict[str, Any]:
     """Merge small files up to the target size. Partial progress commits each file group
-    on its own: a conflict with a concurrent append only redoes one group."""
+    on its own: a conflict with a concurrent append only redoes one group. `where`
+    restricts the rewrite to some partitions (the hourly compaction: today only)."""
     options = {
         "target-file-size-bytes": str(config.ICEBERG_TARGET_FILE_SIZE_BYTES),
         "partial-progress.enabled": "true",
@@ -218,7 +219,16 @@ def rewrite_data_files(sql: Sql, table: str) -> dict[str, Any]:
         "max-concurrent-file-group-rewrites": "1",
     }
     pairs = ", ".join(f"'{k}', '{v}'" for k, v in options.items())
-    return _call(sql, "rewrite_data_files", f"table => '{table}', options => map({pairs})")
+    arguments = f"table => '{table}', options => map({pairs})"
+    if where:
+        arguments += f', where => "{where}"'  # double quotes: the predicate holds quotes
+    return _call(sql, "rewrite_data_files", arguments)
+
+
+def today_filter(column: str, now: datetime | None = None) -> str:
+    """Predicate on the current UTC day: the partition the streaming job writes into."""
+    start = (now or datetime.now(UTC)).astimezone(UTC).strftime("%Y-%m-%d")
+    return f"{column} >= TIMESTAMP '{start} 00:00:00'"
 
 
 def rewrite_manifests(sql: Sql, table: str) -> dict[str, Any]:

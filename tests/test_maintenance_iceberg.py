@@ -168,3 +168,11 @@ def test_table_stats_from_metadata_tables() -> None:
     stats = iceberg.table_stats(sql, TABLE)
     assert stats == iceberg.TableStats(42, 1000, 7, 3)
     assert stats + stats == iceberg.TableStats(84, 2000, 14, 6)
+
+
+def test_hourly_compaction_rewrites_today_only() -> None:
+    """The streaming job writes into today's partition: older days are already compacted."""
+    sql = FakeSql()
+    iceberg.rewrite_data_files(sql, TABLE, iceberg.today_filter("event_time", NOW))
+    (call,) = sql.log
+    assert call.endswith(", where => \"event_time >= TIMESTAMP '2026-10-10 00:00:00'\")")

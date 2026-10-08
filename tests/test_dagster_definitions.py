@@ -280,3 +280,24 @@ def test_iceberg_maintenance_only_while_a_owns_the_latest_day(monkeypatch, owner
     with instance_for_test() as instance:
         result = iceberg_maintenance_schedule(build_schedule_context(instance=instance))
     assert isinstance(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [([], SkipReason), (["spark"], RunRequest), (["duckdb"], SkipReason)],
+)
+def test_hourly_compaction_on_spark_days_only(monkeypatch, days, expected) -> None:
+    """Hourly Bronze compaction (D33) only while the Spark branch's Silver/Gold is due."""
+    from datetime import date
+
+    from src.alternation import calendar as cal
+    from src.dagster.spark_definitions import iceberg_compaction_schedule
+
+    rows = [
+        cal.CalendarDay(date(2026, 10, 8), b, None, {0: 0}, None, "watermark", cal.OPEN)
+        for b in days
+    ]
+    monkeypatch.setattr("src.alternation.monitor.recent_days", lambda: rows)
+    with instance_for_test() as instance:
+        result = iceberg_compaction_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, expected)
