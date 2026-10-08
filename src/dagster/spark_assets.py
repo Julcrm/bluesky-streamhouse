@@ -1,12 +1,12 @@
 """
-Dagster assets of branch A's Silver/Gold (code location `bluesky_spark`, decisions D20,
+Dagster assets of the Spark branch's Silver/Gold (code location `bluesky_spark`, decisions D20,
 D29, D30). Assets contain no business logic: they delegate to dbt-spark, whose queries
 run in the Spark Thrift server (D6 revised); this code server runs no JVM.
 
 - `spark_bronze`: Iceberg Bronze table written by the Spark streaming job, observed
   (current snapshot, read through the Thrift server).
 - dbt models: one asset per Silver and Gold model, dbt tests as asset checks, same
-  models, tests, caps and catch-up loop as branch B (src/dagster/assets.py).
+  models, tests, caps and catch-up loop as the DuckDB branch (src/dagster/assets.py).
 
 Keys are `bluesky/spark/<layer>/<name>` (D30), groups are the layers.
 """
@@ -33,7 +33,7 @@ from src.processing.spark.backlog import SparkBacklog, parse_backlog
 from src.resources import thrift
 
 # bluesky/spark/<layer>/<name> (D30)
-KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_A]
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_SPARK]
 
 dbt_project = DbtProject(
     project_dir=config.DBT_SPARK_PROJECT_DIR,
@@ -82,7 +82,7 @@ def _logged_backlog(invocation: DbtCliInvocation) -> SparkBacklog:
 def spark_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> Iterator:
     """Silver then Gold, with dbt tests as asset checks.
 
-    Catch-up, as branch B: while Silver or Gold is behind by more than one run's cap,
+    Catch-up, as the DuckDB branch: while Silver or Gold is behind by more than one run's cap,
     dbt runs again in silent passes; the final `dbt build` then reads the rest and
     publishes materializations and checks. The backlog is measured by the Thrift server
     (`run-operation measure_backlog`, then each pass's own on-run-end line). A pass that

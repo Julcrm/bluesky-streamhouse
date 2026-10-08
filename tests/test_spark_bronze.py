@@ -1,4 +1,4 @@
-"""Parity of branch A's Spark parsing with branch B's (the shared Bronze contract).
+"""Parity of the Spark branch's parsing with the DuckDB branch's (shared Bronze contract).
 
 The same raw Kafka messages go through parse_bronze_event (Quix) and parse_raw_events
 (Spark); both must keep the same messages with the same values. Needs Java (local
@@ -118,7 +118,7 @@ def _python_rows() -> list[dict]:
 
 
 def _comparable(row: dict) -> dict:
-    """`record` compared as JSON: branch B re-serializes with escaped non-ASCII
+    """`record` compared as JSON: the DuckDB branch re-serializes with escaped non-ASCII
     characters, Spark keeps them; same document, different text."""
     out = dict(row)
     out["record"] = None if row["record"] is None else json.loads(row["record"])
@@ -146,7 +146,7 @@ def test_event_time_is_utc(spark) -> None:
 
 
 def test_bronze_ddl_matches_the_contract() -> None:
-    """Same columns as branch B, hidden day partitioning, zstd."""
+    """Same columns as the DuckDB branch, hidden day partitioning, zstd."""
     ddl = bronze_ddl("cat.bronze.bronze_events")
     for name in BRONZE_COLUMN_NAMES:
         assert f"\n    {name} " in ddl

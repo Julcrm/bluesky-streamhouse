@@ -2,7 +2,7 @@
 Supervisor of an engine container (decision D28): the container's entry point, it runs
 the engine as a subprocess only while the calendar gives a day to its branch.
 
-    python -m src.alternation.supervisor B -- python -m src.processing.quix.app
+    python -m src.alternation.supervisor duckdb -- python -m src.processing.quix.app
 
 Every SUPERVISOR_POLL_SECONDS it reads the calendar (it never writes a decision):
 - a day open or closing for its branch and no engine running: start it, with
@@ -19,11 +19,13 @@ Postgres is unreachable. SIGTERM (redeploy, container stop) is passed to the eng
 which flushes and commits before exiting; the day goes on after the restart.
 
 Service mode (`--service`) supervises a service of the branch rather than its engine,
-e.g. branch A's Thrift server: it runs while the branch owns the latest opened day, from
+e.g. the Spark branch's Thrift server: it runs while the branch owns the latest opened
+day, from
 that opening until the next one (Silver/Gold tail, nightly maintenance and tests
 included), with no day of its own and no late mark or hard stop.
 
-    python -m src.alternation.supervisor A --service -- python -m src.processing.spark.thrift_server
+    python -m src.alternation.supervisor spark --service -- \
+        python -m src.processing.spark.thrift_server
 """
 
 import os
@@ -187,7 +189,7 @@ class ServiceSupervisor(Supervisor):
             self.start()
 
 
-USAGE = "usage: python -m src.alternation.supervisor <A|B> [--service] -- <command...>"
+USAGE = "usage: python -m src.alternation.supervisor <spark|duckdb> [--service] -- <command...>"
 
 
 def main(argv: list[str] | None = None) -> None:

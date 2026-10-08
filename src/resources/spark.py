@@ -1,5 +1,5 @@
 """
-Spark session of branch A (local mode, single node) with the Iceberg REST catalog
+Spark session of the Spark branch (local mode, single node) with the Iceberg REST catalog
 (Lakekeeper, decision D26). Shared by the streaming job and the Iceberg maintenance;
 the Thrift server of dbt-spark (D6 revised) starts with the same catalog settings.
 
@@ -44,7 +44,7 @@ def build_session(app_name: str, driver_memory: str | None = None) -> SparkSessi
         .master("local[*]")
         .config("spark.driver.memory", driver_memory or config.SPARK_DRIVER_MEMORY)
         .config("spark.driver.extraJavaOptions", config.SPARK_DRIVER_JAVA_OPTIONS)
-        # Timestamps are UTC end to end, like branch B's DuckDB sessions
+        # Timestamps are UTC end to end, like the DuckDB branch's DuckDB sessions
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", config.SPARK_SHUFFLE_PARTITIONS)
         .config("spark.sql.adaptive.enabled", "true")

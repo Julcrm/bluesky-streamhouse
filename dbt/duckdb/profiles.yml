@@ -1,4 +1,4 @@
-# DuckDB with the two DuckLake catalogs of branch B attached (Postgres metadata, Parquet on
+# DuckDB with the two DuckLake catalogs of the DuckDB branch attached (Postgres metadata, Parquet on
 # Garage): Bronze, read only, and the transform catalog dbt writes Silver and Gold to.
 # Mirrors src/resources/ducklake.py. Defaults only let `dbt parse` run without credentials.
 bluesky_duckdb:

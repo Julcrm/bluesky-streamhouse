@@ -3,7 +3,7 @@ Completeness of a finished benchmark day (decision D28), the same contract in bo
 branches: every Kafka offset of the day's bounds must be in the branch's Bronze, at
 least once (duplicates are expected and removed in Silver).
 
-Engine-free: the query is plain SQL that DuckDB (branch B) and Spark SQL (branch A)
+Engine-free: the query is plain SQL that DuckDB and Spark SQL
 both run, one scan of Bronze for the three partitions.
 """
 

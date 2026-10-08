@@ -98,7 +98,7 @@ def test_done_once_every_partition_reached_its_end(store) -> None:  # noqa: F811
     assert engine.check_complete({0: 151, 1: 260})
     assert store.get(START).status == cal.DONE
     assert store.get(START).late_at is None
-    assert store.active_for("B") is None
+    assert store.active_for("duckdb") is None
 
 
 def test_a_stop_after_19_30_carries_the_late_mark(store) -> None:  # noqa: F811
@@ -143,7 +143,7 @@ class _Calendar:
         return True
 
 
-def _day(status: str = cal.OPEN, branch: str = "B") -> cal.CalendarDay:
+def _day(status: str = cal.OPEN, branch: str = "duckdb") -> cal.CalendarDay:
     return cal.CalendarDay(
         day=START,
         branch=branch,
@@ -163,7 +163,7 @@ def supervisor():
     calendar = _Calendar()
     clock = {"now": datetime(2026, 10, 8, 12, 0, tzinfo=UTC), "mono": 1000.0}
     sup = Supervisor(
-        "B",
+        "duckdb",
         SLEEPER,
         store=lambda: calendar,
         now=lambda: clock["now"],
@@ -174,11 +174,11 @@ def supervisor():
     sup.stop()
 
 
-def test_starts_only_on_a_day_of_its_branch(supervisor) -> None:
+def test_starts_only_on_spark_day_of_its_branch(supervisor) -> None:
     sup, calendar, _ = supervisor
     sup.tick()
     assert not sup.running()
-    calendar.day = _day(branch="A")
+    calendar.day = _day(branch="spark")
     sup.tick()
     assert not sup.running()
     calendar.day = _day()
@@ -218,7 +218,7 @@ def test_late_at_19_30_then_hard_stop_at_06_30(supervisor) -> None:
     assert calendar.stopped == [(START, cal.INCOMPLETE)]
 
 
-def test_hard_stop_also_ends_a_day_never_closed(supervisor) -> None:
+def test_hard_stop_also_ends_spark_day_never_closed(supervisor) -> None:
     """No close at all (the engine waits for its end offsets): stopped at 06:30."""
     sup, calendar, clock = supervisor
     calendar.day = _day()
@@ -264,21 +264,22 @@ def service():
     calendar = _Calendar()
     clock = {"mono": 1000.0}
     sup = ServiceSupervisor(
-        "A", SLEEPER, store=lambda: calendar, restart_delay=30, monotonic=lambda: clock["mono"]
+        "spark", SLEEPER, store=lambda: calendar, restart_delay=30, monotonic=lambda: clock["mono"]
     )
     yield sup, calendar, clock
     sup.stop()
 
 
 def test_service_runs_while_its_branch_owns_the_latest_day(service) -> None:
-    """A's Thrift server: up from A's opening, down from B's next opening."""
+    """The Spark branch's Thrift server: up from a Spark day's opening, down from the next
+    DuckDB day's opening."""
     sup, calendar, _ = service
     sup.tick()
     assert not sup.running()
-    calendar.owner_branch = "A"
+    calendar.owner_branch = "spark"
     sup.tick()
     assert sup.running()
-    calendar.owner_branch = "B"
+    calendar.owner_branch = "duckdb"
     sup.tick()
     assert not sup.running()
     assert calendar.stopped == [] and calendar.late == []  # no day of its own
@@ -286,7 +287,7 @@ def test_service_runs_while_its_branch_owns_the_latest_day(service) -> None:
 
 def test_crashed_service_restarts_after_the_delay(service) -> None:
     sup, calendar, clock = service
-    calendar.owner_branch = "A"
+    calendar.owner_branch = "spark"
     sup.tick()
     sup.process.kill()
     sup.process.wait()
@@ -299,7 +300,7 @@ def test_crashed_service_restarts_after_the_delay(service) -> None:
 
 def test_unreachable_calendar_keeps_the_service_state(service) -> None:
     sup, calendar, _ = service
-    calendar.owner_branch = "A"
+    calendar.owner_branch = "spark"
     sup.tick()
     calendar.unreachable = True
     sup.tick()
@@ -308,4 +309,4 @@ def test_unreachable_calendar_keeps_the_service_state(service) -> None:
 
 def test_cli_rejects_a_command_without_separator() -> None:
     with pytest.raises(SystemExit):
-        main(["A", "--service", "python"])
+        main(["spark", "--service", "python"])

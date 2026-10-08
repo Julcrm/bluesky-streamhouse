@@ -1,6 +1,6 @@
 """
-Branch A streaming job: `raw_events` (Redpanda) -> Iceberg Bronze, with Spark
-Structured Streaming. Same contract as branch B (src/processing/bronze.py): same
+Spark branch streaming job: `raw_events` (Redpanda) -> Iceberg Bronze, with Spark
+Structured Streaming. Same contract as the DuckDB branch (src/processing/bronze.py): same
 columns, one micro-batch every 5 s capped at 50 000 messages (decisions D10, D13).
 
 - Catalog: Lakekeeper (Iceberg REST, Postgres-backed). It signs Spark's S3 requests
@@ -47,7 +47,7 @@ BRONZE_IDENTIFIER = f"{config.SPARK_CATALOG}.{config.ICEBERG_BRONZE_NAMESPACE}.{
 __all__ = ["BRONZE_IDENTIFIER", "bronze_ddl", "build_session", "main", "parse_raw_events"]
 
 # Jetstream v2 commit envelope, as the producer writes it to raw_events. `record` is
-# not typed here: it is kept as raw JSON, like branch B
+# not typed here: it is kept as raw JSON, like the DuckDB branch
 ENVELOPE = StructType(
     [
         StructField("$type", StringType()),
@@ -68,7 +68,7 @@ ENVELOPE = StructType(
         ),
     ]
 )
-# Fields without which branch B (parse_bronze_event) drops a message
+# Fields without which the DuckDB branch (parse_bronze_event) drops a message
 REQUIRED = ("seq", "did", "collection", "operation", "rkey", "event_time")
 
 
@@ -115,7 +115,7 @@ def bronze_ddl(identifier: str = BRONZE_IDENTIFIER) -> str:
         "PARTITIONED BY (days(event_time))\n"
         "TBLPROPERTIES (\n"
         "    'format-version' = '2',\n"
-        # Same codec as branch B (D14)
+        # Same codec as the DuckDB branch (D14)
         "    'write.parquet.compression-codec' = 'zstd',\n"
         # Every commit (one per 5 s, ~17 000 a day) writes a new metadata.json and keeps
         # the old ones by default: Iceberg deletes them beyond the last 100 itself
@@ -193,7 +193,7 @@ class BronzeBatchWriter:
         self.day = day
         self.identifier = identifier
         self._query_id: str | None = None
-        # Cost of the idempotence check of the last batch (benchmark: complexity of A)
+        # Cost of the idempotence check of the last batch (benchmark: Spark branch complexity)
         self.last_key_check_ms = 0.0
 
     def query_id(self) -> str:

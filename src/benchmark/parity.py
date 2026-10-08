@@ -1,6 +1,6 @@
 """
-Parity of the benchmark contract (phase 5): fed with the same Kafka offsets, branch A
-(Spark, Iceberg, dbt-spark) and branch B (Quix, DuckLake, dbt-duckdb) must produce the
+Parity of the benchmark contract (phase 5): fed with the same Kafka offsets, the Spark branch
+(Spark, Iceberg, dbt-spark) and the DuckDB branch (Quix, DuckLake, dbt-duckdb) must produce the
 same Silver and Gold rows. Each branch's tables are dumped to Parquet, then compared row
 by row, both ways, with DuckDB.
 
@@ -30,7 +30,7 @@ GOLD_TABLES = (
 )
 TABLES = SILVER_TABLES + GOLD_TABLES
 LINEAGE_COLUMNS = ("bronze_snapshot_id", "silver_snapshot_id", "processed_at")
-# Built with list_distinct in branch B, array_distinct in branch A: same set, any order
+# Built with list_distinct (DuckDB branch), array_distinct (Spark branch): same set, any order
 UNORDERED_LISTS = ("hashtags", "mention_dids")
 
 

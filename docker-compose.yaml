@@ -2,18 +2,18 @@
 # Bluesky Streamhouse — Docker Compose (production, Coolify)
 # Services:
 #   - producer: Jetstream v2 -> Redpanda `raw_events` (no exposed port)
-#   - quix: branch B, Redpanda `raw_events` -> DuckLake Bronze (no exposed port), run by
-#     its supervisor on B's days only (D28, calendar in the bluesky_benchmark database)
-#   - bluesky-duckdb: branch B Dagster gRPC code server, Silver/Gold dbt assets
+#   - quix: the DuckDB branch, Redpanda `raw_events` -> DuckLake Bronze (no exposed port), run by
+#     its supervisor on DuckDB days only (D28, calendar in the bluesky_benchmark database)
+#   - bluesky-duckdb: the DuckDB branch's Dagster gRPC code server, Silver/Gold dbt assets
 #     (port 4000 on the coolify network only; the service name is its DNS alias)
 #   - lakekeeper (+ one-shot lakekeeper-migrate, lakekeeper-init): Iceberg REST
-#     catalog of branch A, database iceberg_catalog on the shared Postgres
-#   - spark: branch A, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
-#   - bluesky-spark: branch A Dagster gRPC code server (Iceberg maintenance; phase 5:
+#     catalog of the Spark branch, database iceberg_catalog on the shared Postgres
+#   - spark: the Spark branch, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
+#   - bluesky-spark: the Spark branch's Dagster gRPC code server (Iceberg maintenance; phase 5:
 #     dbt-spark), port 4000 on the coolify network only
-#   - spark-thrift: branch A Spark Thrift server, dbt-spark's engine (port 10000 on the
-#     coolify network only), run by its supervisor from the opening of a day of A until
-#     the opening of the next day of B (D6 revised)
+#   - spark-thrift: Spark Thrift server of the Spark branch, dbt-spark's engine (port
+#     10000 on the coolify network only), run by its supervisor from the opening of a
+#     Spark day until the opening of the next DuckDB day (D6 revised)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
 # Services of later phases (Spark, API) are added here.
@@ -40,7 +40,7 @@ services:
       - coolify
     restart: always
 
-  # Branch B: raw_events -> DuckLake Bronze (Postgres catalog, Parquet on Garage)
+  # DuckDB branch: raw_events -> DuckLake Bronze (Postgres catalog, Parquet on Garage)
   quix:
     build:
       context: .
@@ -75,7 +75,7 @@ services:
       - coolify
     restart: always
 
-  # Branch B Dagster code location `bluesky_duckdb` (decision D20). The shared
+  # DuckDB branch Dagster code location `bluesky_duckdb` (decision D20). The shared
   # dagster-workspace reaches it at bluesky-duckdb:4000 (Coolify adds the service name
   # as network alias). Runs execute here: dbt + DuckDB memory counts against this limit
   bluesky-duckdb:
@@ -116,16 +116,16 @@ services:
     deploy:
       resources:
         limits:
-          # Branch B's 2.5 GB transform budget (D31). Swap: Docker's default (as much
+          # The DuckDB branch's 2.5 GB transform budget (D31). Swap: Docker's default (as much
           # as the RAM limit), measured in phase 7 like the RAM
           memory: 2560M
     networks:
       - coolify
     restart: always
 
-  # --- Branch A -------------------------------------------------------------
+  # --- Spark branch -------------------------------------------------------------
   # Iceberg REST catalog (Lakekeeper, Rust, ~30 MiB). Its RAM and CPU are part of
-  # branch A's fixed cost in the benchmark, as Postgres is for DuckLake
+  # the Spark branch's fixed cost in the benchmark, as Postgres is for DuckLake
   lakekeeper-migrate:
     image: quay.io/lakekeeper/catalog:v0.13.6
     command: ["migrate"]
@@ -221,7 +221,7 @@ services:
       - coolify
     restart: always
 
-  # Branch A Dagster code location `bluesky_spark` (D20): same 1.5 GB as branch B's.
+  # Spark branch Dagster code location `bluesky_spark` (D20): same 1.5 GB as the DuckDB branch's.
   # Runs execute here, Spark in local mode (maintenance JVM: 900 MB heap)
   bluesky-spark:
     build:
@@ -234,7 +234,7 @@ services:
       - DAGSTER_POSTGRES_PASSWORD=${DAGSTER_POSTGRES_PASSWORD}
       - DAGSTER_POSTGRES_HOST=${DAGSTER_POSTGRES_HOST}
       - DAGSTER_POSTGRES_DB=${DAGSTER_POSTGRES_DB}
-      # Benchmark calendar (database bluesky_benchmark, D28): completeness of A's days
+      # Benchmark calendar (database bluesky_benchmark, D28): completeness of Spark days
       - POSTGRES_HOST=${POSTGRES_HOST}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_USER=${POSTGRES_USER}
@@ -252,7 +252,8 @@ services:
         limits:
           # Same limit as before the Thrift server (D31, 2026-10-08): Dagster and the dbt
           # client take ~640 MiB, the Iceberg maintenance's own JVM fits until 5d. With
-          # spark-thrift, A's transform may use up to 3.25 GB against 2.5 GB for B: limits
+          # spark-thrift, the Spark branch's transform may use up to 3.25 GB against 2.5 GB
+          # for the DuckDB branch: limits
           # are ceilings, reported as context; the benchmark compares the measured
           # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
           memory: 1536M
@@ -264,14 +265,14 @@ services:
     restart: always
 
   # Spark Thrift server (D6 revised): one long-lived JVM, local[2], that dbt-spark reaches
-  # through PyHive. Its supervisor (service mode) runs it while A owns the latest opened
-  # day: A's Silver/Gold, the nightly maintenance and tests; stopped on B's days. With
-  # bluesky-spark, branch A's transform (3.25 GB, D31)
+  # through PyHive. Its supervisor (service mode) runs it while the Spark branch owns the
+  # latest opened day: its Silver/Gold, the nightly maintenance and tests; stopped on the
+  # DuckDB branch's days. With bluesky-spark, the Spark branch's transform (3.25 GB, D31)
   spark-thrift:
     build:
       context: .
       dockerfile: docker/dagster-spark/Dockerfile
-    command: [".venv/bin/python", "-m", "src.alternation.supervisor", "A", "--service", "--",
+    command: [".venv/bin/python", "-m", "src.alternation.supervisor", "spark", "--service", "--",
               ".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
     expose:
       - "10000"

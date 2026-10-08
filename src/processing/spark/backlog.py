@@ -1,5 +1,5 @@
 """
-Backlog of branch A, as logged by dbt itself: the `log_backlog` macro of the dbt-spark
+Backlog of the Spark branch, as logged by dbt itself: the `log_backlog` macro of the dbt-spark
 project (dbt/spark/macros/backlog.sql) writes one `BLUESKY_BACKLOG {json}` line, at the
 end of every `dbt run` (on-run-end) or alone (`dbt run-operation measure_backlog`). Counted
 inside the Thrift server's Spark session: no Iceberg client in the code server.

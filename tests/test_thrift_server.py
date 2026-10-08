@@ -23,7 +23,7 @@ def test_jars_on_the_classpath_and_the_driver_class_path() -> None:
 
 
 def test_sessions_get_the_dbt_settings() -> None:
-    """Same cores and shuffle partitions as B's DuckDB threads, Iceberg as default."""
+    """Same cores and shuffle partitions as the DuckDB branch's threads, Iceberg as default."""
     args = command(JARS)
     conf = _conf(args)
     assert args[args.index("--master") + 1] == f"local[{config.SPARK_THRIFT_CORES}]"

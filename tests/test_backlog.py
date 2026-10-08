@@ -44,7 +44,7 @@ def test_caps_come_from_dbt_project() -> None:
     """The caps are dbt vars, not a second copy in Python."""
     assert silver_max_rows_per_run() == 500_000
     assert gold_max_hours_per_run() == 6
-    # Same caps in branch A's project (contract)
+    # Same caps in the Spark branch's project (contract)
     assert silver_max_rows_per_run(config.DBT_SPARK_PROJECT_DIR) == 500_000
     assert gold_max_hours_per_run(config.DBT_SPARK_PROJECT_DIR) == 6
 

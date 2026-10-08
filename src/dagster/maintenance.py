@@ -1,5 +1,5 @@
 """
-Nightly maintenance of branch B (decisions D14, D21), as assets so that every run keeps
+Nightly maintenance of the DuckDB branch (decisions D14, D21), as assets so that every run keeps
 its before/after figures in Dagster: files, bytes and snapshots over time are benchmark
 data (drift, H8). No business logic here: everything is in `src.maintenance.ducklake`.
 
@@ -32,7 +32,7 @@ from src.resources.bronze_lock import exclusive_bronze_lock
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
 
 GROUP = "maintenance"
-KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B, GROUP]
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_DUCKDB, GROUP]
 LAKE_STORAGE_KEY = AssetKey([*KEY_PREFIX, "lake_storage"])
 SILVER_GOLD_JOB = "bluesky_silver_gold"
 

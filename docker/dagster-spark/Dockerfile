@@ -1,6 +1,6 @@
 # =============================================================================
-# Dagster gRPC code server `bluesky_spark` — Bluesky Streamhouse, branch A
-# Serves branch A's assets to the shared dagster-workspace on port 4000: dbt-spark
+# Dagster gRPC code server `bluesky_spark` — Bluesky Streamhouse, the Spark branch
+# Serves the Spark branch's assets to the shared dagster-workspace on port 4000: dbt-spark
 # Silver/Gold (queries run in the spark-thrift container, same image), Iceberg
 # maintenance. Runs execute here (DefaultRunLauncher), their memory counts against this
 # container's limit (D20).

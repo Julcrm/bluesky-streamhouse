@@ -1,5 +1,5 @@
 """
-Shared DuckLake connection for branch B (Quix sink, maintenance, Dagster assets).
+Shared DuckLake connection for the DuckDB branch (Quix sink, maintenance, Dagster assets).
 DuckDB attached to a Postgres catalog (decision D12), with Parquet data files on Garage.
 
 Kept free of Dagster imports: the Quix image does not install Dagster. The Dagster

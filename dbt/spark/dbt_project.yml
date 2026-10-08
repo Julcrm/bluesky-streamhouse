@@ -1,4 +1,4 @@
-# Branch A (Spark Structured Streaming -> Iceberg): Silver and Gold models run by
+# Spark branch (Spark Structured Streaming -> Iceberg): Silver and Gold models run by
 # dbt-spark. Same model names, columns and tests as dbt/duckdb (benchmark contract);
 # the mechanisms are Iceberg's own (incremental append scans, dynamic overwrite).
 name: bluesky_spark
@@ -21,7 +21,7 @@ on-run-end:
   - "{{ log_backlog() }}"
 
 vars:
-  # Same caps as branch B (dbt/duckdb/dbt_project.yml), same reasons
+  # Same caps as the DuckDB branch (dbt/duckdb/dbt_project.yml), same reasons
   silver_max_rows_per_run: 500000
   gold_max_hours_per_run: 6
   gold_top_hashtags: 50
@@ -34,7 +34,7 @@ models:
     +file_format: iceberg
     +tblproperties:
       format-version: "2"
-      # Same codec as Bronze and branch B (D14)
+      # Same codec as Bronze and the DuckDB branch (D14)
       write.parquet.compression-codec: zstd
       # Each run commits; keep the metadata files bounded, like Bronze
       write.metadata.delete-after-commit.enabled: "true"

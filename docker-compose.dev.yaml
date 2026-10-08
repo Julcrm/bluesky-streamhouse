@@ -6,14 +6,14 @@
 #   - garage:           S3-compatible object storage, single node (localhost:3900)
 #                       bucket + access key auto-created from .env on first start
 #   - postgres:         DuckLake catalog, Iceberg catalog, Dagster storage (localhost:5432)
-#   - lakekeeper:       Iceberg REST catalog of branch A (localhost:8181), with its
+#   - lakekeeper:       Iceberg REST catalog of the Spark branch (localhost:8181), with its
 #                       one-shot migrate and init (bootstrap + warehouse on Garage)
-#   - spark:            branch A streaming job (profile `spark`: make spark)
-#   - iceberg-maintenance: branch A Iceberg maintenance, once (make iceberg-maintenance)
-#   - spark-thrift:     branch A Spark Thrift server for dbt-spark (localhost:10000),
+#   - spark:            the Spark branch's streaming job (profile `spark`: make spark)
+#   - iceberg-maintenance: the Spark branch's Iceberg maintenance, once (make iceberg-maintenance)
+#   - spark-thrift:     the Spark Thrift server of the Spark branch for dbt-spark (localhost:10000),
 #                       always up locally (make spark-thrift); in prod its supervisor
-#                       runs it on A's days only
-#   - dbt-spark:        dbt build of branch A against spark-thrift (make dbt-spark-build)
+#                       runs it on the Spark branch's days only
+#   - dbt-spark:        dbt build of the Spark branch against spark-thrift (make dbt-spark-build)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
 # Credentials come from .env (created from .env.example by `make up`), local only.
@@ -93,7 +93,7 @@ services:
       timeout: 5s
       retries: 20
 
-  # Iceberg REST catalog of branch A (Postgres-backed), first migrated then initialised
+  # Iceberg REST catalog of the Spark branch (Postgres-backed), first migrated then initialised
   lakekeeper-migrate:
     image: quay.io/lakekeeper/catalog:v0.13.6
     command: ["migrate"]
@@ -144,7 +144,7 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # Branch A streaming job. Runs in the network because Lakekeeper hands out
+  # Spark branch streaming job. Runs in the network because Lakekeeper hands out
   # http://garage:3900, which the host cannot resolve
   spark:
     build:
@@ -176,7 +176,7 @@ services:
       redpanda:
         condition: service_healthy
 
-  # Branch A Iceberg maintenance, run once on demand (make iceberg-maintenance), with
+  # Iceberg maintenance of the Spark branch, run once on demand (make iceberg-maintenance), with
   # the image of the bluesky_spark code location; run history in the local Dagster db
   iceberg-maintenance:
     build:
@@ -191,7 +191,7 @@ services:
       DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
       DAGSTER_POSTGRES_HOST: postgres
       DAGSTER_POSTGRES_DB: dagster
-      # Benchmark calendar (D28): completeness of A's days
+      # Benchmark calendar (D28): completeness of the Spark branch's days
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
@@ -206,9 +206,9 @@ services:
       lakekeeper-init:
         condition: service_completed_successfully
 
-  # Branch A Spark Thrift server (D6 revised), image of the bluesky_spark code location.
+  # Spark Thrift server of the Spark branch (D6 revised), image of the bluesky_spark code location.
   # Started directly, without the supervisor of prod (the local calendar rarely gives
-  # the day to A). Port 10000 on 127.0.0.1: dbt can also run from the host
+  # the day to the Spark branch). Port 10000 on 127.0.0.1: dbt can also run from the host
   spark-thrift:
     build:
       context: .
@@ -242,7 +242,7 @@ services:
       lakekeeper-init:
         condition: service_completed_successfully
 
-  # Branch A Silver/Gold with dbt-spark (make dbt-spark-build): the dbt process only, the
+  # Spark branch Silver/Gold with dbt-spark (make dbt-spark-build): the dbt process only, the
   # project mounted from the working copy; the queries run in spark-thrift
   dbt-spark:
     build:
