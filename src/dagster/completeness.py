@@ -48,9 +48,10 @@ def completeness_result(
     return MaterializeResult(metadata=metadata)
 
 
-def completeness_request(op_name: str, branch: str, day: date) -> RunRequest:
-    """One completeness run per branch and day (the run key makes it once)."""
+def completeness_request(op_names: list[str], branch: str, day: date) -> RunRequest:
+    """One completeness run per branch and day (the run key makes it once), every op of
+    the job (completeness, then the benchmark windows, D34) on the same day."""
     return RunRequest(
         run_key=f"completeness:{branch}:{day.isoformat()}",
-        run_config={"ops": {op_name: {"config": {"day": day.isoformat()}}}},
+        run_config={"ops": {op: {"config": {"day": day.isoformat()}} for op in op_names}},
     )

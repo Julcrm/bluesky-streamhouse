@@ -204,6 +204,44 @@ ALTERNATION_START_DATE = date(2026, 10, 7)
 # Neutral database (neither branch's catalog) on the shared Postgres: branch_calendar,
 # later the benchmark windows (phase 7)
 BENCHMARK_DB = os.getenv("BENCHMARK_DB", "bluesky_benchmark")
+
+# --- Benchmark collector (phase 7, decision D34) ---
+# Raw samples every 10 s, kept 30 days; the 5-minute windows are computed from them
+COLLECTOR_INTERVAL_SECONDS = 10
+COLLECTOR_RETENTION_DAYS = 30
+# Host cgroup tree and /proc, mounted read-only in the bench-collector container
+COLLECTOR_CGROUP_ROOT = os.getenv("COLLECTOR_CGROUP_ROOT", "/host/cgroup")
+COLLECTOR_PROC_ROOT = os.getenv("COLLECTOR_PROC_ROOT", "/host/proc")
+# Docker socket proxy that only allows listing containers (id -> compose service)
+COLLECTOR_DOCKER_URL = os.getenv("COLLECTOR_DOCKER_URL", "http://bench-docker-proxy:2375")
+# Measured containers by compose service: (branch, layer), branch None for the shared
+# ones (D31, D34). Branch values are the calendar's (src/alternation/calendar.py)
+BENCHMARK_SERVICES: dict[str, tuple[str | None, str]] = {
+    "spark": ("spark", "streaming"),
+    "spark-thrift": ("spark", "transform"),
+    "bluesky-spark": ("spark", "transform"),
+    "lakekeeper": ("spark", "catalog"),
+    "quix": ("duckdb", "streaming"),
+    "bluesky-duckdb": ("duckdb", "transform"),
+    "producer": (None, "ingestion"),
+    "redpanda": (None, "broker"),
+    "garage": (None, "storage"),
+    "bench-collector": (None, "collector"),
+}
+# Catalogs in the shared Postgres: pg_stat_database counters, an estimate (D12, D34)
+CATALOG_DATABASES = ("ducklake_catalog", "iceberg_catalog")
+# 5-minute windows built at night from the samples and Bronze (D34)
+BENCHMARK_WINDOW_SECONDS = 300
+# A window counts in the ratios only if the samples cover 90 % of it (collector gaps)
+BENCHMARK_MIN_COVERAGE = 0.9
+# Traffic levels to compare the branches at equal throughput (msg/s, upper bound, label)
+BENCHMARK_RATE_BUCKETS = ((200, "0-200"), (500, "200-500"), (float("inf"), "500+"))
+# Host health flags (D32), provisional until the protocol freeze: a window is
+# contaminated above 5 % CPU steal, above 3 s of memory or I/O stall in 5 min (1 %), or
+# below 512 MiB of available memory
+HOST_STEAL_PCT_MAX = 5.0
+HOST_STALL_MS_MAX = 3000.0
+HOST_MIN_AVAILABLE_MIB = 512.0
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
@@ -280,8 +318,8 @@ SPARK_PACKAGES = (
 # Nightly, 30 min after the DuckDB branch's so the two never compete for the VPS
 ICEBERG_MAINTENANCE_CRON = "30 2 * * *"
 # Hourly compaction of the Bronze table on the Spark branch's days (D33): a commit every
-# 5 s leaves ~720 small files and manifests an hour, which every incremental Silver read
-# plans over. At :50, between two Silver/Gold ticks (:45 and :00)
+# 5 s leaves ~720 small data files an hour (~1 250 rows each), each one a signed S3 read
+# for every Silver pass and test. At :50, between two Silver/Gold ticks (:45 and :00)
 ICEBERG_HOURLY_COMPACTION_CRON = "50 * * * *"
 # Time travel kept: 24 h, as DuckLake (D21). With a commit every 5 s, ~17 000 snapshots
 # stay listed in every metadata.json: their cost is measured, not avoided (H8)

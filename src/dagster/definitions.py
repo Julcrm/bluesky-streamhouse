@@ -26,6 +26,7 @@ from src.dagster.alternation import (
     calendar_job,
     close_day_schedule,
     completeness_job,
+    duckdb_benchmark_windows,
     ducklake_day_completeness,
     open_day_schedule,
 )
@@ -132,6 +133,7 @@ defs = Definitions(
         *maintenance_assets,
         branch_calendar,
         ducklake_day_completeness,
+        duckdb_benchmark_windows,
     ],
     jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
     schedules=[

@@ -22,6 +22,7 @@ from dagster import (
 from src import config as settings
 from src.alternation import calendar as cal
 from src.alternation.completeness import offsets_query
+from src.benchmark import windows
 from src.dagster.completeness import (
     CompletenessDay,
     closed_day,
@@ -59,9 +60,36 @@ def iceberg_day_completeness(
     return completeness_result(context, day, found)
 
 
+@asset(
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_SPARK, "benchmark"],
+    group_name="benchmark",
+    deps=[iceberg_day_completeness],
+    description="5-minute benchmark windows of a finished Spark day: collector samples and "
+    "the day's messages and latency read from Bronze through Thrift, after the "
+    "completeness check (D34).",
+)
+def spark_benchmark_windows(
+    context: AssetExecutionContext, config: CompletenessDay
+) -> MaterializeResult:
+    """Rebuilds the day's windows (idempotent); Bronze is read once, at night, while the
+    Thrift server still runs (until the next DuckDB opening)."""
+    day = closed_day(config.day)
+    wait_for_runs(
+        context.instance, context.log, context.run_id, None, settings.SPARK_RUN_WAIT_SECONDS
+    )
+    rows = thrift.query(windows.messages_query_spark(BRONZE, day))
+    conn = cal.connect_benchmark()
+    try:
+        counts = windows.rebuild_day(conn, day, rows)
+    finally:
+        conn.close()
+    context.log.info(f"Day {day.day}: {counts}")
+    return MaterializeResult(metadata=counts)
+
+
 iceberg_completeness_job = define_asset_job(
     name="bluesky_iceberg_day_completeness",
-    selection=[iceberg_day_completeness],
+    selection=[iceberg_day_completeness, spark_benchmark_windows],
     description="Every Kafka offset of a finished day of the Spark branch is in Bronze (D28).",
 )
 
@@ -82,7 +110,11 @@ def iceberg_completeness_sensor(context: SensorEvaluationContext) -> list[RunReq
     except Exception as e:  # noqa: BLE001 - calendar not created yet, or Postgres down
         return SkipReason(f"Calendar unreachable: {e}")
     requests_ = [
-        completeness_request(iceberg_day_completeness.op.name, cal.BRANCH_SPARK, day.day)
+        completeness_request(
+            [iceberg_day_completeness.op.name, spark_benchmark_windows.op.name],
+            cal.BRANCH_SPARK,
+            day.day,
+        )
         for day in days
         if day.status == cal.DONE and day.effective_branch == cal.BRANCH_SPARK
     ]
