@@ -43,6 +43,10 @@ services:
       resources:
         limits:
           memory: 256M  # measured ~37 MiB steady, <110 MiB with a full send queue
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 128M
     networks:
       - coolify
     restart: always
@@ -86,6 +90,10 @@ services:
           # rising in its first prod catch-up without swap (2026-10-08), 1 GB left no margin.
           # Quix: ~250 MiB live, ~700 MiB in the 35 M-row catch-up of 2026-09-28
           memory: 1280M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 768M
     networks:
       - coolify
     restart: always
@@ -143,6 +151,10 @@ services:
           # The DuckDB branch's 2.5 GB transform budget (D31). Swap: Docker's default (as much
           # as the RAM limit), measured in phase 7 like the RAM
           memory: 2560M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 2G
     networks:
       - coolify
     restart: always
@@ -182,6 +194,10 @@ services:
       resources:
         limits:
           memory: 256M  # ~30 MiB measured
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 128M
     networks:
       - coolify
     restart: always
@@ -243,6 +259,10 @@ services:
         limits:
           # D27, same as Quix: 951 MiB real and rising in the first prod catch-up (08/10)
           memory: 1280M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 1G
     # No swap for the JVM (D31, as spark-thrift): a swapped-out heap would stall the
     # 5-second micro-batches and inflate the end-to-end latency measured (H4)
     memswap_limit: 1280M
@@ -298,6 +318,10 @@ services:
           # are ceilings, reported as context; the benchmark compares the measured
           # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
           memory: 1536M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 768M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
@@ -341,6 +365,10 @@ services:
       resources:
         limits:
           memory: 1792M  # anon peak 1,356 MiB, full catch-up + dbt build (2026-10-08)
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set
+        # measured on 2026-10-08, so other projects' memory goes first under pressure
+        reservations:
+          memory: 1536M
     # No swap for the JVM (D31): garbage collections walk the whole heap, a swapped-out
     # heap would stall every pass
     memswap_limit: 1792M
