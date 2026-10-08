@@ -168,8 +168,8 @@ services:
     volumes:
       - spark-checkpoint:/app/state
     # Same limits as prod: no swap for the JVM (D31)
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 1280m
+    memswap_limit: 1280m
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
