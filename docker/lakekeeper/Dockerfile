@@ -1,5 +1,6 @@
 # =============================================================================
-# One-shot Lakekeeper setup (bootstrap + Iceberg warehouse on Garage), idempotent.
+# One-shot Lakekeeper setup (bootstrap, Iceberg warehouse on Garage, namespace
+# `default`), idempotent.
 # A tiny image rather than a bind-mounted script: the compose works the same locally
 # and on Coolify
 # =============================================================================

@@ -26,8 +26,8 @@ def test_definitions_load() -> None:
 
     job = defs.get_job_def(silver_gold_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
-    assert "bluesky/bronze/quix_bronze" in keys
-    assert {"bluesky/silver/silver_posts", "bluesky/gold/gold_hashtags_hour"} <= keys
+    assert "bluesky/quix/bronze/quix_bronze" in keys
+    assert {"bluesky/quix/silver/silver_posts", "bluesky/quix/gold/gold_hashtags_hour"} <= keys
     assert len(defs.get_repository_def().asset_graph.asset_check_keys) > 0
 
 
@@ -70,10 +70,10 @@ def test_schedule_skips_while_a_run_is_active(b_day_running) -> None:
 
 def test_stop_terminates_a_running_dbt_process() -> None:
     """A dbt subprocess left running by a failed op is stopped before the retry."""
-    from src.dagster.assets import _stop
+    from src.dagster.dbt_common import stop_process
 
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    _stop(process, timeout=5)
+    stop_process(process, timeout=5)
     assert process.poll() is not None
 
 
@@ -108,10 +108,10 @@ def test_maintenance_job_loads() -> None:
     job = defs.get_job_def(maintenance_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
     assert keys == {
-        "bluesky/maintenance/bronze_maintenance",
-        "bluesky/maintenance/transform_maintenance",
-        "bluesky/maintenance/lake_storage",
-        "bluesky/maintenance/dagster_run_purge",
+        "bluesky/quix/maintenance/bronze_maintenance",
+        "bluesky/quix/maintenance/transform_maintenance",
+        "bluesky/quix/maintenance/lake_storage",
+        "bluesky/quix/maintenance/dagster_run_purge",
     }
     checks = {key.name for key in defs.get_repository_def().asset_graph.asset_check_keys}
     assert {"bucket_under_alert", "catalog_under_alert"} <= checks
@@ -152,16 +152,23 @@ def test_failure_email_skipped_without_configuration(monkeypatch) -> None:
     assert send_failure_email("run", "job", "error") is False
 
 
-def test_every_asset_sits_in_the_project_folder() -> None:
-    """The Dagster catalog is shared with velib: every key starts with `bluesky/<layer>`,
-    and each layer is an asset group."""
-    from src.dagster.definitions import defs
+@pytest.mark.parametrize(
+    ("module", "engine"),
+    [("src.dagster.definitions", "quix"), ("src.dagster.spark_definitions", "spark")],
+)
+def test_every_asset_sits_in_the_project_and_engine_folder(module: str, engine: str) -> None:
+    """The Dagster catalog is shared with velib: every key starts with
+    `bluesky/<engine>/<layer>` (D30), each layer is an asset group. The calendar is
+    neutral: `bluesky/alternation/branch_calendar`."""
+    import importlib
 
-    graph = defs.get_repository_def().asset_graph
+    graph = importlib.import_module(module).defs.get_repository_def().asset_graph
     layers = {"bronze", "silver", "gold", "maintenance", "alternation"}
     for key in graph.get_all_asset_keys():
-        assert key.path[0] == "bluesky" and key.path[1] in layers, key
-        assert graph.get(key).group_name == key.path[1], key
+        if key.path == ["bluesky", "alternation", "branch_calendar"]:
+            continue
+        assert key.path[:2] == ["bluesky", engine] and key.path[2] in layers, key
+        assert graph.get(key).group_name == key.path[2], key
 
 
 def test_reaper_closes_unfinished_runs_of_this_location_only() -> None:
@@ -187,26 +194,83 @@ def test_reaper_closes_unfinished_runs_of_this_location_only() -> None:
 
 
 def test_spark_code_location_loads_without_branch_b() -> None:
-    """Branch A's code location: Iceberg maintenance under bluesky/maintenance, its own
-    schedule and alert sensor, and no import of branch B's dbt project."""
-    from src.dagster.spark_definitions import defs, iceberg_maintenance_job
+    """Branch A's code location: dbt-spark Silver/Gold under bluesky/spark (D30), Iceberg
+    maintenance, its own schedules and alert sensor, and no module of branch B's
+    (DuckDB, its dbt project): the code server of A stays free of them."""
+    from src.dagster.spark_definitions import defs, iceberg_maintenance_job, spark_silver_gold_job
 
     job = defs.get_job_def(iceberg_maintenance_job.name)
     keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
-    assert keys == {"bluesky/maintenance/iceberg_bronze_maintenance"}
+    assert keys == {
+        "bluesky/spark/maintenance/iceberg_bronze_maintenance",
+        "bluesky/spark/maintenance/iceberg_transform_maintenance",
+    }
+    # One maintenance step at a time on the shared Thrift server
+    assert iceberg_maintenance_job.config["execution"]["config"]["multiprocess"] == {
+        "max_concurrent": 1
+    }
+    job = defs.get_job_def(spark_silver_gold_job.name)
+    keys = {key.to_user_string() for key in job.asset_layer.executable_asset_keys}
+    assert "bluesky/spark/bronze/spark_bronze" in keys
+    assert {"bluesky/spark/silver/silver_posts", "bluesky/spark/gold/gold_hashtags_hour"} <= keys
+    for name in (
+        "spark_silver_gold_schedule",
+        "spark_nightly_checks_schedule",
+        "iceberg_maintenance_schedule",
+    ):
+        assert defs.get_schedule_def(name) is not None
     assert defs.get_sensor_def("spark_failure_alert_sensor") is not None
     assert defs.get_sensor_def("iceberg_completeness_sensor") is not None
-    assert defs.get_schedule_def("iceberg_maintenance_schedule") is not None
-    # In a fresh interpreter: loading branch A must not load branch B's modules
+    # In a fresh interpreter: loading branch A must not load branch B's modules, nor
+    # PySpark: every Spark statement goes through the Thrift server (5d)
     loaded = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import sys, src.dagster.spark_definitions; "
-            "print([m for m in sys.modules if m in ('src.dagster.assets', 'dagster_dbt')])",
+            "import sys, src.dagster.spark_definitions; print([m for m in sys.modules "
+            "if m in ('src.dagster.assets', 'src.processing.backlog', 'duckdb', 'pyspark')])",
         ],
         capture_output=True,
         text=True,
         check=True,
     ).stdout.strip()
     assert loaded == "[]"
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [([], SkipReason), (["A"], RunRequest), (["B"], SkipReason)],
+)
+def test_spark_schedule_runs_on_branch_a_days_only(monkeypatch, days, expected) -> None:
+    """Silver/Gold of A every 15 min on A's days only, like B's on B's days."""
+    from datetime import date
+
+    from src.alternation import calendar as cal
+    from src.dagster.spark_definitions import spark_silver_gold_schedule
+
+    rows = [
+        cal.CalendarDay(date(2026, 10, 8), b, None, {0: 0}, None, "watermark", cal.OPEN)
+        for b in days
+    ]
+    monkeypatch.setattr("src.alternation.monitor.recent_days", lambda: rows)
+    with instance_for_test() as instance:
+        result = spark_silver_gold_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, expected)
+
+
+@pytest.mark.parametrize(("owner", "expected"), [("A", RunRequest), ("B", SkipReason)])
+def test_iceberg_maintenance_only_while_a_owns_the_latest_day(monkeypatch, owner, expected):
+    """The Thrift server runs only while A owns the latest opened day (D6 revised)."""
+    from src.alternation import calendar as cal
+    from src.dagster.spark_definitions import iceberg_maintenance_schedule
+
+    class _Conn:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cal, "connect_benchmark", _Conn)
+    monkeypatch.setattr(cal.CalendarStore, "__init__", lambda self, conn: None)
+    monkeypatch.setattr(cal.CalendarStore, "owner", lambda self: owner)
+    with instance_for_test() as instance:
+        result = iceberg_maintenance_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, expected)

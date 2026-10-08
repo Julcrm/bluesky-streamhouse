@@ -148,7 +148,7 @@ def close_day_schedule(context: ScheduleEvaluationContext) -> RunRequest:
 
 
 @asset(
-    key_prefix=[settings.DAGSTER_ASSET_PREFIX, GROUP],
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_B, GROUP],
     group_name=GROUP,
     description="Every Kafka offset of a finished day of branch B is in its DuckLake Bronze (D28).",
 )

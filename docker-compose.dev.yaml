@@ -10,6 +10,10 @@
 #                       one-shot migrate and init (bootstrap + warehouse on Garage)
 #   - spark:            branch A streaming job (profile `spark`: make spark)
 #   - iceberg-maintenance: branch A Iceberg maintenance, once (make iceberg-maintenance)
+#   - spark-thrift:     branch A Spark Thrift server for dbt-spark (localhost:10000),
+#                       always up locally (make spark-thrift); in prod its supervisor
+#                       runs it on A's days only
+#   - dbt-spark:        dbt build of branch A against spark-thrift (make dbt-spark-build)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
 # Credentials come from .env (created from .env.example by `make up`), local only.
@@ -181,6 +185,7 @@ services:
     command: ["dagster", "job", "execute", "-m", "src.dagster.spark_definitions", "-j", "bluesky_iceberg_maintenance"]
     environment:
       ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_THRIFT_HOST: spark-thrift
       DAGSTER_POSTGRES_USER: ${POSTGRES_USER:-streamhouse}
       DAGSTER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-streamhouse}
       DAGSTER_POSTGRES_HOST: postgres
@@ -199,6 +204,62 @@ services:
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
+
+  # Branch A Spark Thrift server (D6 revised), image of the bluesky_spark code location.
+  # Started directly, without the supervisor of prod (the local calendar rarely gives
+  # the day to A). Port 10000 on 127.0.0.1: dbt can also run from the host
+  spark-thrift:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    container_name: bsh-spark-thrift
+    profiles: ["spark"]
+    command: [".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
+    environment:
+      ICEBERG_CATALOG_URI: http://lakekeeper:8181/catalog
+      SPARK_THRIFT_DRIVER_MEMORY: 768m
+      SPARK_DRIVER_JAVA_OPTIONS: >-
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+      MALLOC_ARENA_MAX: "2"
+    ports:
+      - "127.0.0.1:10000:10000"
+    healthcheck:
+      test:
+        - CMD
+        - .venv/bin/python
+        - -c
+        - import socket; socket.create_connection(('localhost', 10000), 2)
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    # Same limits as prod (D31): no swap for the JVM
+    mem_limit: 1792m
+    memswap_limit: 1792m
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+
+  # Branch A Silver/Gold with dbt-spark (make dbt-spark-build): the dbt process only, the
+  # project mounted from the working copy; the queries run in spark-thrift
+  dbt-spark:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    profiles: ["spark"]
+    working_dir: /tmp
+    entrypoint: ["/app/.venv/bin/dbt"]
+    command: ["build", "--project-dir", "/app/dbt/spark", "--profiles-dir", "/app/dbt/spark"]
+    environment:
+      SPARK_THRIFT_HOST: spark-thrift
+    volumes:
+      - ./dbt/spark:/app/dbt/spark
+    mem_limit: 512m
+    memswap_limit: 512m
+    depends_on:
+      spark-thrift:
+        condition: service_healthy
 
 configs:
   garage_toml:

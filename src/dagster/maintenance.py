@@ -32,7 +32,7 @@ from src.resources.bronze_lock import exclusive_bronze_lock
 from src.resources.ducklake import DuckLakeSettings, connect, transform_settings
 
 GROUP = "maintenance"
-KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, GROUP]
+KEY_PREFIX = [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_B, GROUP]
 LAKE_STORAGE_KEY = AssetKey([*KEY_PREFIX, "lake_storage"])
 SILVER_GOLD_JOB = "bluesky_silver_gold"
 FINISHED_RUN_STATUSES = [

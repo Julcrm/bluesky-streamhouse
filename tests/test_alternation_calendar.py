@@ -108,6 +108,19 @@ def test_supervisor_sees_only_its_branch_running(store) -> None:
     assert store.active_for("B") is None
 
 
+def test_owner_is_the_branch_of_the_latest_opened_day(store) -> None:
+    """B's day owns the VPS from its opening, night included, until A's day opens."""
+    assert store.owner() is None
+    store.create_day(START, {0: 0})
+    assert store.owner() is None  # pending: not opened yet
+    store.open_day(START, NOW)
+    store.close_day(START, {0: 5}, NOW)
+    store.mark_stopped(START, NOW, cal.DONE)
+    assert store.owner() == "B"  # closed and done: still B's until the next opening
+    store.open_day(START + timedelta(days=1), NOW + timedelta(days=1))
+    assert store.owner() == "A"
+
+
 def test_opening_waits_for_the_previous_engine_to_stop(store) -> None:
     """Never two engines: a previous day still running blocks the opening."""
     store.create_day(START, {0: 0})

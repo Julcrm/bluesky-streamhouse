@@ -18,8 +18,7 @@ import s3fs
 from src import config
 from src.resources.ducklake import DuckLakeSettings, connect
 
-# Column a table's retention is measured on, by order of preference
-TIME_COLUMNS = ("event_time", "minute", "hour")
+TIME_COLUMNS = config.RETENTION_TIME_COLUMNS
 PROGRESS_TABLE = "meta.silver_progress"
 
 

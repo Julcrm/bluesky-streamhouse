@@ -1,0 +1,18 @@
+# dbt-spark reaches branch A's Spark Thrift server through PyHive (decision D6 revised):
+# one long-lived JVM, no Spark session start per dbt command. The server holds the Spark
+# settings (src/processing/spark/thrift_server.py): local[2], Lakekeeper Iceberg REST
+# catalog as default catalog (D26), so schemas are Iceberg namespaces (silver, gold, meta).
+bluesky_spark:
+  target: default
+  outputs:
+    default:
+      type: spark
+      method: thrift
+      host: "{{ env_var('SPARK_THRIFT_HOST', 'localhost') }}"
+      port: 10000
+      schema: silver
+      # One model at a time: predictable memory in the server, like branch B
+      threads: 1
+      # The server may still be starting (supervisor): retry the connection for ~1 min
+      connect_retries: 6
+      connect_timeout: 10

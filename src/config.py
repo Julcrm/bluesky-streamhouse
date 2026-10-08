@@ -109,10 +109,15 @@ DUCKLAKE_PARQUET_COMPRESSION = "zstd"
 # or bluesky_spark (branch A), set by each code server container
 DAGSTER_CODE_LOCATION = os.getenv("DAGSTER_CODE_LOCATION", "bluesky_duckdb")
 # Every asset key starts with it: one folder per project in the shared Dagster catalog
-# (velib-lakehouse uses `velib`), then one per layer (bronze, silver, gold, maintenance)
+# (velib-lakehouse uses `velib`), then one per engine, then one per layer (bronze,
+# silver, gold, maintenance, alternation). Engine folders (D30): both branches have
+# the same model names (contract), and two code locations cannot declare the same key
 DAGSTER_ASSET_PREFIX = "bluesky"
-# dbt project of branch B, found from this file (no absolute path, unlike velib)
+DAGSTER_ENGINE_B = "quix"
+DAGSTER_ENGINE_A = "spark"
+# dbt projects, found from this file (no absolute path, unlike velib)
 DBT_DUCKDB_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "duckdb"
+DBT_SPARK_PROJECT_DIR = Path(__file__).resolve().parent.parent / "dbt" / "spark"
 # Silver -> Gold every 15 min, same freshness contract as branch A
 DAGSTER_SCHEDULE_CRON = "*/15 * * * *"
 DAGSTER_TIMEZONE = "Europe/Paris"
@@ -125,7 +130,7 @@ DAGSTER_RETRY_DELAY_SECONDS = 30
 # carries on from where this one stopped
 CATCHUP_MAX_PASSES = 100
 
-# --- Maintenance, branch B (decisions D14, D21) ---
+# --- Maintenance, branch B (decisions D14, D21); retention shared with branch A ---
 # Retention by event day (tables are split by day: a DELETE drops whole files)
 BRONZE_RETENTION_DAYS = 7
 SILVER_RETENTION_DAYS = 7
@@ -133,6 +138,8 @@ GOLD_RETENTION_DAYS = 30
 # Read positions in meta.silver_progress older than this are deleted (the last done
 # position of each model is always kept)
 SILVER_PROGRESS_RETENTION_DAYS = 7
+# Column a table's retention is measured on, by order of preference (both branches)
+RETENTION_TIME_COLUMNS = ("event_time", "minute", "hour")
 # Nightly, outside the 07:00-19:00 window of the branches (D10)
 MAINTENANCE_CRON = "0 2 * * *"
 # DuckLake options persisted by set_option, applied by CHECKPOINT (D21): 24 h of time
@@ -159,8 +166,10 @@ MAINTENANCE_WAIT_FOR_RUN_SECONDS = 30 * 60
 # expired before Silver or Gold read them, so the maintenance stops instead
 READ_POSITION_MAX_AGE_HOURS = 24
 # Alerts (D14, D21): whole bucket (orphans and pending deletions included), and the
-# Postgres database holding both catalogs
-BUCKET_ALERT_BYTES = 80 * 10**9
+# Postgres database holding both catalogs. A day dropped by the retention stays two
+# nights in the bucket (expired the next night, deleted the night after), so the bucket
+# runs ~30 GB above the live data: 90 GB leaves room for Redpanda in the 100 GB budget
+BUCKET_ALERT_BYTES = 90 * 10**9
 CATALOG_ALERT_BYTES = 2 * 10**9
 # Dagster runs of this code location only: the instance is shared with velib (D20)
 DAGSTER_RUN_RETENTION_DAYS = 30
@@ -270,8 +279,23 @@ ICEBERG_SNAPSHOT_RETENTION_HOURS = 24
 ICEBERG_ORPHAN_MIN_AGE_HOURS = 25
 # Same target as DuckLake's CHECKPOINT (DUCKLAKE_TARGET_FILE_SIZE)
 ICEBERG_TARGET_FILE_SIZE_BYTES = 512 * 1024 * 1024
-# The maintenance JVM runs alone in the code server (1.5 GB, like branch B's)
-SPARK_MAINTENANCE_DRIVER_MEMORY = os.getenv("SPARK_MAINTENANCE_DRIVER_MEMORY", "900m")
+
+# --- Spark Thrift server, branch A Silver/Gold (decision D6 revised) ---
+# One long-lived JVM that dbt-spark (PyHive) connects to: no Spark session start per
+# dbt command. Runs from the opening of a day of A until the opening of the next day of
+# B (supervisor in service mode): it serves A's Silver/Gold, maintenance and nightly tests
+SPARK_THRIFT_HOST = os.getenv("SPARK_THRIFT_HOST", "localhost")
+SPARK_THRIFT_PORT = 10000
+# Two cores, as branch B's dbt runs DuckDB with 2 threads (same transform budget). With
+# local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
+SPARK_THRIFT_CORES = 2
+# Heap of the server JVM; the rest of the 1.5 GB container is off-heap (~600 MB of
+# metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
+# 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
+SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
+# One run at a time in branch A's location (D30): maintenance and completeness wait for
+# the other runs (a 07:00 Silver/Gold catch-up included) up to this long
+SPARK_RUN_WAIT_SECONDS = 2 * 60 * 60
 
 # --- Benchmark (phase 7) ---
 BENCHMARK_SAMPLE_SECONDS = 10

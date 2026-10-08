@@ -71,15 +71,15 @@ def transform_due() -> str | None:
     """Why branch B's Silver/Gold runs now (its engine runs, or stopped less than an
     hour ago), None otherwise. CPU spent on dbt while branch A is measured would bias
     the benchmark. Calendar unreachable: not run (the engine does not run either)."""
-    try:
-        conn = cal.connect_benchmark()
-        try:
-            days = cal.CalendarStore(conn).recent(3)
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001 - table not created yet, or Postgres down
-        return None
-    return monitor.transform_due(days, cal.BRANCH_B, datetime.now(UTC))
+    days = monitor.recent_days()
+    return monitor.transform_due(days, cal.BRANCH_B, datetime.now(UTC)) if days else None
+
+
+def nightly_checks_due() -> str | None:
+    """Why branch B's nightly tests run tonight (the day that just ended was B's, D30),
+    None otherwise. Calendar unreachable: not run."""
+    days = monitor.recent_days()
+    return monitor.nightly_checks_due(days, cal.BRANCH_B, datetime.now(UTC)) if days else None
 
 
 @schedule(
@@ -109,7 +109,11 @@ def maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | Ski
 )
 def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     """Every night at 03:00 (Europe/Paris), after the maintenance: every dbt test over a
-    day (D25). The run itself waits for the other runs of the location."""
+    day (D25), only after a day of branch B (D30). The run itself waits for the other
+    runs of the location."""
+    due = nightly_checks_due()
+    if due is None:
+        return SkipReason("The day that just ended was not a finished day of branch B")
     previous = [
         run
         for run in active_location_runs(context.instance, nightly_checks_job.name)
@@ -117,7 +121,7 @@ def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | 
     ]
     if previous:
         return SkipReason(f"Nightly checks run {previous[0].run_id} still in progress")
-    return RunRequest()
+    return RunRequest(tags={"bluesky/nightly_checks_due": due})
 
 
 defs = Definitions(

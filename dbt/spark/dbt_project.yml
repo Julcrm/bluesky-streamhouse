@@ -1,0 +1,56 @@
+# Branch A (Spark Structured Streaming -> Iceberg): Silver and Gold models run by
+# dbt-spark. Same model names, columns and tests as dbt/duckdb (benchmark contract);
+# the mechanisms are Iceberg's own (incremental append scans, dynamic overwrite).
+name: bluesky_spark
+version: 1.0.0
+profile: bluesky_spark
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+# Read positions of Silver and Gold, and the hours Gold still has to rebuild, live in
+# Iceberg tables of the `meta` namespace (macros/bronze_changes.sql, gold_incremental.sql)
+on-run-start:
+  - "CREATE NAMESPACE IF NOT EXISTS meta"
+  - "{{ create_silver_progress() }}"
+  - "{{ create_gold_progress() }}"
+  - "{{ create_gold_pending() }}"
+# What is left to read, logged for the catch-up loop of the Dagster asset
+on-run-end:
+  - "{{ log_backlog() }}"
+
+vars:
+  # Same caps as branch B (dbt/duckdb/dbt_project.yml), same reasons
+  silver_max_rows_per_run: 500000
+  gold_max_hours_per_run: 6
+  gold_top_hashtags: 50
+  # Test windows (decision D25), Spark interval literals
+  test_window: "INTERVAL 2 HOURS"
+  gold_check_window: "INTERVAL 3 HOURS"
+
+models:
+  bluesky_spark:
+    +file_format: iceberg
+    +tblproperties:
+      format-version: "2"
+      # Same codec as Bronze and branch B (D14)
+      write.parquet.compression-codec: zstd
+      # Each run commits; keep the metadata files bounded, like Bronze
+      write.metadata.delete-after-commit.enabled: "true"
+      write.metadata.previous-versions-max: "100"
+    silver:
+      +schema: silver
+      # Append the Bronze rows of the new snapshots only (incremental append scan)
+      +materialized: incremental
+      +incremental_strategy: append
+      +partition_by: ["days(event_time)"]
+      # After the insert commit: the read position moves even with no new row
+      +post-hook: "{{ mark_silver_progress() }}"
+    gold:
+      +schema: gold
+      # Dynamic overwrite: the hour partitions present in the output replace the
+      # stored ones atomically; other hours are left untouched
+      +materialized: incremental
+      +incremental_strategy: insert_overwrite
+      +post-hook: "{{ mark_gold_done() }}"

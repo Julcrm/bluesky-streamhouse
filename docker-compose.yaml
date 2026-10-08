@@ -11,6 +11,9 @@
 #   - spark: branch A, Redpanda `raw_events` -> Iceberg Bronze (no exposed port)
 #   - bluesky-spark: branch A Dagster gRPC code server (Iceberg maintenance; phase 5:
 #     dbt-spark), port 4000 on the coolify network only
+#   - spark-thrift: branch A Spark Thrift server, dbt-spark's engine (port 10000 on the
+#     coolify network only), run by its supervisor from the opening of a day of A until
+#     the opening of the next day of B (D6 revised)
 # Shared services, deployed as separate Coolify resources:
 #   - redpanda (redpanda:9092) · garage (garage:3900) · postgres
 # Services of later phases (Spark, API) are added here.
@@ -99,6 +102,9 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=us-east-1
       - BUCKET=${BUCKET:-bluesky-streamhouse}
+      # DuckDB's working memory in dbt (D31): the 2.5 GB transform budget minus ~1 GB
+      # of Dagster and dbt processes (code server, run worker, step process, dbt client)
+      - DUCKDB_MEMORY_LIMIT=1.5GB
       # Kafka high watermarks: the 19:00 bounds of the alternation (D28)
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       # Failure alerts by email (Resend, as velib); none are sent while unset
@@ -110,7 +116,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1536M  # DuckDB memory_limit 1 GB (dbt profile) + dagster; ~200 MiB idle
+          # Branch B's 2.5 GB transform budget (D31). Swap: Docker's default (as much
+          # as the RAM limit), measured in phase 7 like the RAM
+          memory: 2560M
     networks:
       - coolify
     restart: always
@@ -229,6 +237,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # dbt-spark's engine (profile method: thrift)
+      - SPARK_THRIFT_HOST=spark-thrift
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
       - RESEND_API_KEY=${RESEND_API_KEY}
@@ -237,7 +247,51 @@ services:
     deploy:
       resources:
         limits:
+          # Same limit as before the Thrift server (D31, 2026-10-08): Dagster and the dbt
+          # client take ~640 MiB, the Iceberg maintenance's own JVM fits until 5d. With
+          # spark-thrift, A's transform may use up to 3.25 GB against 2.5 GB for B: limits
+          # are ceilings, reported as context; the benchmark compares the measured
+          # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
           memory: 1536M
+    depends_on:
+      lakekeeper-init:
+        condition: service_completed_successfully
+    networks:
+      - coolify
+    restart: always
+
+  # Spark Thrift server (D6 revised): one long-lived JVM, local[2], that dbt-spark reaches
+  # through PyHive. Its supervisor (service mode) runs it while A owns the latest opened
+  # day: A's Silver/Gold, the nightly maintenance and tests; stopped on B's days. With
+  # bluesky-spark, branch A's transform (3.25 GB, D31)
+  spark-thrift:
+    build:
+      context: .
+      dockerfile: docker/dagster-spark/Dockerfile
+    command: [".venv/bin/python", "-m", "src.alternation.supervisor", "A", "--service", "--",
+              ".venv/bin/python", "-m", "src.processing.spark.thrift_server"]
+    expose:
+      - "10000"
+    environment:
+      - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # Benchmark calendar (database bluesky_benchmark, D28), read by the supervisor
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Heap 768 MB (D31, measured 2026-10-07: 7 passes of 500 000 rows + dbt build, peak
+      # 1.37 GiB); ~600 MB more off-heap whatever the heap. A 1 GB heap was OOM-killed
+      - SPARK_THRIFT_DRIVER_MEMORY=768m
+      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+      - MALLOC_ARENA_MAX=2
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1792M  # anon peak 1,356 MiB, full catch-up + dbt build (2026-10-08)
+    # No swap for the JVM (D31): garbage collections walk the whole heap, a swapped-out
+    # heap would stall every pass
+    memswap_limit: 1792M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully

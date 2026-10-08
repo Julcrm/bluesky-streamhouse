@@ -22,7 +22,7 @@ bluesky_duckdb:
         TimeZone: UTC
         # Lets large inserts stream and spill instead of buffering to keep row order
         preserve_insertion_order: false
-        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '1GB') }}"
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '1.5GB') }}"
         # DuckDB defaults to the host's core count, not the container's CPU limit: 12
         # threads of JSON buffers overflow 1 GB on silver_posts, 4 or fewer fit
         threads: "{{ env_var('DUCKDB_THREADS', '2') }}"
