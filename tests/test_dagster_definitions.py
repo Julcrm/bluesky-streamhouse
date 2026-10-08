@@ -111,7 +111,7 @@ def test_maintenance_job_loads() -> None:
         "bluesky/quix/maintenance/bronze_maintenance",
         "bluesky/quix/maintenance/transform_maintenance",
         "bluesky/quix/maintenance/lake_storage",
-        "bluesky/quix/maintenance/dagster_run_purge",
+        "bluesky/quix/maintenance/housekeeping",
     }
     checks = {key.name for key in defs.get_repository_def().asset_graph.asset_check_keys}
     assert {"bucket_under_alert", "catalog_under_alert"} <= checks
@@ -204,6 +204,7 @@ def test_spark_code_location_loads_without_branch_b() -> None:
     assert keys == {
         "bluesky/spark/maintenance/iceberg_bronze_maintenance",
         "bluesky/spark/maintenance/iceberg_transform_maintenance",
+        "bluesky/spark/maintenance/housekeeping",
     }
     # One maintenance step at a time on the shared Thrift server
     assert iceberg_maintenance_job.config["execution"]["config"]["multiprocess"] == {

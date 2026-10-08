@@ -211,6 +211,9 @@ services:
       resources:
         limits:
           memory: 1G
+    # No swap for the JVM (D31, as spark-thrift): a swapped-out heap would stall the
+    # 5-second micro-batches and inflate the end-to-end latency measured (H4)
+    memswap_limit: 1G
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully

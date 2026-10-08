@@ -33,6 +33,7 @@ from src import config
 from src.alternation import calendar as cal
 from src.alternation import monitor
 from src.dagster.alerts import failure_alert_sensor
+from src.dagster.housekeeping import housekeeping_asset
 from src.dagster.runs import active_location_runs, wait_for_runs
 from src.dagster.spark_alternation import (
     iceberg_completeness_job,
@@ -166,10 +167,20 @@ def iceberg_transform_maintenance(context: AssetExecutionContext) -> Materialize
     return _maintain(context, tables, {t: k for t, k in trims.items() if t in meta})
 
 
+housekeeping = housekeeping_asset(
+    [config.DAGSTER_ASSET_PREFIX, config.DAGSTER_ENGINE_A, GROUP],
+    GROUP,
+    dbt_project.project_dir / dbt_project.target_path,
+)
+
+
 iceberg_maintenance_job = define_asset_job(
     name="bluesky_iceberg_maintenance",
-    selection=AssetSelection.assets(iceberg_bronze_maintenance, iceberg_transform_maintenance),
-    description="Nightly Iceberg maintenance of branch A: Bronze, Silver, Gold, positions (D21).",
+    selection=AssetSelection.assets(
+        iceberg_bronze_maintenance, iceberg_transform_maintenance, housekeeping
+    ),
+    description="Nightly Iceberg maintenance of branch A: Bronze, Silver, Gold, positions (D21), "
+    "and the housekeeping of this code location.",
     # One step at a time, as branch B's: both send their procedures to the one Thrift server
     config={"execution": {"config": {"multiprocess": {"max_concurrent": 1}}}},
 )
@@ -271,6 +282,7 @@ defs = Definitions(
         spark_dbt_models,
         iceberg_bronze_maintenance,
         iceberg_transform_maintenance,
+        housekeeping,
         iceberg_day_completeness,
     ],
     jobs=[
