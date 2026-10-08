@@ -165,7 +165,7 @@ def test_every_asset_sits_in_the_project_and_engine_folder(module: str, engine: 
     import importlib
 
     graph = importlib.import_module(module).defs.get_repository_def().asset_graph
-    layers = {"bronze", "silver", "gold", "maintenance", "alternation"}
+    layers = {"bronze", "silver", "gold", "maintenance", "alternation", "benchmark"}
     for key in graph.get_all_asset_keys():
         if key.path == ["bluesky", "alternation", "branch_calendar"]:
             continue

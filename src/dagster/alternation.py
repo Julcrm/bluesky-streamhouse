@@ -32,6 +32,7 @@ from src import config as settings
 from src.alternation import calendar as cal
 from src.alternation import control
 from src.alternation.completeness import offsets_query
+from src.benchmark import windows
 from src.dagster.completeness import (
     CompletenessDay,
     closed_day,
@@ -167,13 +168,44 @@ def ducklake_day_completeness(
     return completeness_result(context, day, found)
 
 
+@asset(
+    key_prefix=[settings.DAGSTER_ASSET_PREFIX, settings.DAGSTER_ENGINE_DUCKDB, "benchmark"],
+    group_name="benchmark",
+    deps=[ducklake_day_completeness],
+    description="5-minute benchmark windows of a finished DuckDB day: collector samples and "
+    "the day's messages and latency read from Bronze, after the completeness check (D34).",
+)
+def duckdb_benchmark_windows(
+    context: AssetExecutionContext, config: CompletenessDay
+) -> MaterializeResult:
+    """Rebuilds the day's windows (idempotent); Bronze is read once, at night."""
+    day = closed_day(config.day)
+    table = f"{settings.DUCKLAKE_BRONZE_ALIAS}.main.{BRONZE_TABLE}"
+    lake = connect(read_only=True)
+    try:
+        rows = lake.execute(windows.messages_query_duckdb(table, day)).fetchall()
+    finally:
+        lake.close()
+    conn = cal.connect_benchmark()
+    try:
+        counts = windows.rebuild_day(conn, day, rows)
+    finally:
+        conn.close()
+    context.log.info(f"Day {day.day}: {counts}")
+    return MaterializeResult(metadata=counts)
+
+
 completeness_job = define_asset_job(
     name="bluesky_ducklake_day_completeness",
-    selection=[ducklake_day_completeness],
+    selection=[ducklake_day_completeness, duckdb_benchmark_windows],
     description="Every Kafka offset of a finished day of the DuckDB branch is in Bronze (D28).",
 )
 
 
 def completeness_request_b(day: date) -> RunRequest:
     """One completeness run per finished day of the DuckDB branch."""
-    return completeness_request(ducklake_day_completeness.op.name, cal.BRANCH_DUCKDB, day)
+    return completeness_request(
+        [ducklake_day_completeness.op.name, duckdb_benchmark_windows.op.name],
+        cal.BRANCH_DUCKDB,
+        day,
+    )

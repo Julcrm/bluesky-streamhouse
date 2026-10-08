@@ -230,6 +230,18 @@ BENCHMARK_SERVICES: dict[str, tuple[str | None, str]] = {
 }
 # Catalogs in the shared Postgres: pg_stat_database counters, an estimate (D12, D34)
 CATALOG_DATABASES = ("ducklake_catalog", "iceberg_catalog")
+# 5-minute windows built at night from the samples and Bronze (D34)
+BENCHMARK_WINDOW_SECONDS = 300
+# A window counts in the ratios only if the samples cover 90 % of it (collector gaps)
+BENCHMARK_MIN_COVERAGE = 0.9
+# Traffic levels to compare the branches at equal throughput (msg/s, upper bound, label)
+BENCHMARK_RATE_BUCKETS = ((200, "0-200"), (500, "200-500"), (float("inf"), "500+"))
+# Host health flags (D32), provisional until the protocol freeze: a window is
+# contaminated above 5 % CPU steal, above 3 s of memory or I/O stall in 5 min (1 %), or
+# below 512 MiB of available memory
+HOST_STEAL_PCT_MAX = 5.0
+HOST_STALL_MS_MAX = 3000.0
+HOST_MIN_AVAILABLE_MIB = 512.0
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks

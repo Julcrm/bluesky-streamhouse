@@ -40,6 +40,7 @@ from src.dagster.spark_alternation import (
     iceberg_completeness_job,
     iceberg_completeness_sensor,
     iceberg_day_completeness,
+    spark_benchmark_windows,
 )
 from src.dagster.spark_assets import dbt_project, spark_bronze, spark_dbt_models
 from src.maintenance import iceberg
@@ -359,6 +360,7 @@ defs = Definitions(
         housekeeping,
         iceberg_hourly_compaction,
         iceberg_day_completeness,
+        spark_benchmark_windows,
     ],
     jobs=[
         spark_silver_gold_job,
