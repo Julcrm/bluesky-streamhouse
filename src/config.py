@@ -245,6 +245,18 @@ BENCHMARK_RATE_BUCKETS = ((200, "0-200"), (500, "200-500"), (float("inf"), "500+
 HOST_STEAL_PCT_MAX = 5.0
 HOST_STALL_MS_MAX = 3000.0
 HOST_MIN_AVAILABLE_MIB = 512.0
+
+# --- Frozen sample of the controlled test (phase 7, decision D35) ---
+# ~20 min of raw_events copied once into a topic kept forever, never modified: the
+# weekly replay reads it for both branches
+BENCH_SAMPLE_TOPIC = "bench_raw_events_sample"
+# An evening slice: the United States are awake, traffic and mix are representative.
+# Copied after the fact while raw_events still holds it (24 h retention)
+BENCH_SAMPLE_START = "2026-10-09T19:30:00+02:00"
+BENCH_SAMPLE_MINUTES = 20
+# One run only, at this date (Europe/Paris): 21:00, after the DuckDB day's close and its
+# last Silver/Gold runs, when nothing is measured; skipped once the sample topic exists
+BENCH_SAMPLE_CRON = "0 21 9 10 *"
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
