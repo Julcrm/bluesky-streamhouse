@@ -7,9 +7,11 @@
 -- Output      : lakekeeper.silver.silver_follows, partitioned by days(event_time)
 -- =============================================================================
 
+{%- set batch = bronze_batch() %}
+
 WITH bronze AS (
     SELECT *
-    FROM {{ bronze_new_rows() }} AS b
+    FROM {{ batch.rows }} AS b
     WHERE collection = 'app.bsky.graph.follow'
       AND operation = 'create'
 ),
@@ -30,7 +32,7 @@ typed AS (
 ),
 
 deduplicated AS (
-    {{ deduplicate_on_seq('typed') }}
+    {{ deduplicate_on_seq('typed', batch) }}
 )
 
 SELECT * FROM deduplicated
