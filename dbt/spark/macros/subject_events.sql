@@ -1,9 +1,10 @@
 -- Likes and reposts share one shape: a `subject` strong ref (uri + cid) to a record.
 -- AT URI layout: at://<did>/<collection>/<rkey>, so split_part indexes 3 and 5
 {% macro subject_events(collection) %}
+{%- set batch = bronze_batch() %}
 WITH bronze AS (
     SELECT *
-    FROM {{ bronze_new_rows() }} AS b
+    FROM {{ batch.rows }} AS b
     WHERE collection = '{{ collection }}'
       AND operation = 'create'
 ),
@@ -26,7 +27,7 @@ typed AS (
 ),
 
 deduplicated AS (
-    {{ deduplicate_on_seq('typed') }}
+    {{ deduplicate_on_seq('typed', batch) }}
 )
 
 SELECT * FROM deduplicated

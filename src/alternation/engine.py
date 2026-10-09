@@ -99,7 +99,7 @@ class EngineDay:
         if row.started_at is None:
             seek(row.start_offsets)
             logger.info(f"Day {self.day}: first launch, reading from {row.start_offsets}")
-            self._calendar().mark_started(self.day, datetime.now(UTC))
+            self._calendar().mark_started(self.day, self._now())
         else:
             logger.info(f"Day {self.day}: restart, resuming from the engine's own commits")
 
@@ -160,7 +160,7 @@ class EngineDay:
         if self.done or self.end is None or not cal.reached(position, self.end):
             return self.done
         try:
-            self._calendar().mark_stopped(self.day, datetime.now(UTC), cal.DONE)
+            self._calendar().mark_stopped(self.day, self._now(), cal.DONE)
         except Exception as e:  # noqa: BLE001 - retried at the next check
             logger.warning(f"Marking the day done failed ({e})")
             self._drop_store()
