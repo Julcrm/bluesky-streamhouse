@@ -91,8 +91,22 @@ def nightly_checks_due() -> str | None:
     default_status=DefaultScheduleStatus.RUNNING,
 )
 def maintenance_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Every night at 02:00 (Europe/Paris), outside the 07:00-19:00 window (D10). A
+    """Every night at 02:00 (Europe/Paris), outside the 07:00-19:00 window (D10), only
+    while the DuckDB branch owns the latest opened day, as the Iceberg maintenance does
+    for the Spark branch. After a Spark day nothing was written, but the previous night's
+    own snapshots (retention DELETE, flush) and Gold's last writes would be over 24 h old
+    and trip the guard; Silver and Gold also always read within the last 24 h then. A
     Silver/Gold run in progress is waited for by the maintenance itself."""
+    try:
+        conn = cal.connect_benchmark()
+        try:
+            owner = cal.CalendarStore(conn).owner()
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 - calendar not created yet, or Postgres down
+        return SkipReason(f"Calendar unreachable: {e}")
+    if owner != cal.BRANCH_DUCKDB:
+        return SkipReason(f"Branch {owner} owns the latest day: nothing new to maintain")
     previous = [
         run
         for run in active_location_runs(context.instance, maintenance_job.name)
