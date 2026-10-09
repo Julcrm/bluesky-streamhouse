@@ -34,6 +34,7 @@ from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.runs import active_location_runs, blocks_schedule
+from src.dagster.sample import benchmark_sample, sample_job, sample_schedule
 from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
 
 __all__ = [
@@ -148,14 +149,23 @@ defs = Definitions(
         branch_calendar,
         ducklake_day_completeness,
         duckdb_benchmark_windows,
+        benchmark_sample,
     ],
-    jobs=[silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
+    jobs=[
+        silver_gold_job,
+        maintenance_job,
+        nightly_checks_job,
+        calendar_job,
+        completeness_job,
+        sample_job,
+    ],
     schedules=[
         silver_gold_schedule,
         maintenance_schedule,
         nightly_checks_schedule,
         open_day_schedule,
         close_day_schedule,
+        sample_schedule,
     ],
     sensors=[failure_alert_sensor, calendar_alert_sensor],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
