@@ -54,7 +54,7 @@
 {#- Standalone measure (`dbt run-operation measure_backlog`): run-operation skips the
     on-run-start hooks, so the meta tables are created first (first run of a branch) -#}
 {% macro measure_backlog() %}
-    {%- do run_query("CREATE NAMESPACE IF NOT EXISTS meta") -%}
+    {%- do run_query("CREATE NAMESPACE IF NOT EXISTS " ~ bench_prefix() ~ "meta") -%}
     {%- do run_query(create_silver_progress()) -%}
     {%- do run_query(create_gold_progress()) -%}
     {%- do run_query(create_gold_pending()) -%}

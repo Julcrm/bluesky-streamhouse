@@ -9,7 +9,7 @@ Credentials go through DuckDB secrets, never through the ATTACH string, so they 
 leak into error messages. DuckLake only picks up the *default* (unnamed) Postgres secret.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 import duckdb
@@ -48,6 +48,23 @@ def transform_settings() -> DuckLakeSettings:
         metadata_schema=config.DUCKLAKE_TRANSFORM_METADATA_SCHEMA,
         alias=config.DUCKLAKE_TRANSFORM_ALIAS,
     )
+
+
+def bench_settings(settings: DuckLakeSettings) -> DuckLakeSettings:
+    """The controlled test's catalog matching `settings` (decision D36): same alias, so
+    the SQL is unchanged, own metadata schema and data path, so the test never touches
+    the production catalog's snapshots."""
+    if settings.alias == config.DUCKLAKE_BRONZE_ALIAS:
+        schema, path = (
+            config.DUCKLAKE_BENCH_BRONZE_METADATA_SCHEMA,
+            config.DUCKLAKE_BENCH_BRONZE_DATA_PATH,
+        )
+    else:
+        schema, path = (
+            config.DUCKLAKE_BENCH_TRANSFORM_METADATA_SCHEMA,
+            config.DUCKLAKE_BENCH_TRANSFORM_DATA_PATH,
+        )
+    return replace(settings, metadata_schema=schema, data_path=path)
 
 
 def sql_literal(value: str | int) -> str:

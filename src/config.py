@@ -257,6 +257,25 @@ BENCH_SAMPLE_MINUTES = 20
 # One run only, at this date (Europe/Paris): 21:00, after the DuckDB day's close and its
 # last Silver/Gold runs, when nothing is measured; skipped once the sample topic exists
 BENCH_SAMPLE_CRON = "0 21 9 10 *"
+
+# --- Controlled test: "bench" mode of the engines (decision D36) ---
+# The supervisor starts its engine with BENCH_RUN=<run id> for a requested run of
+# bench_runs, never while a day of its branch is active. The engine then reads the
+# replay topic and writes isolated tables; it stops once its position reaches the end
+# offsets the replay recorded
+BENCH_TOPIC = "bench_raw_events"
+BENCH_QUIX_CONSUMER_GROUP = "bench-quix"
+# DuckLake: separate catalogs (own metadata schemas and data paths), same aliases, so
+# the SQL is unchanged. Snapshots are catalog-wide: the test must not touch the state
+# of the production catalogs (H8b)
+DUCKLAKE_BENCH_BRONZE_METADATA_SCHEMA = "bench_bronze"
+DUCKLAKE_BENCH_TRANSFORM_METADATA_SCHEMA = "bench_transform"
+DUCKLAKE_BENCH_BRONZE_DATA_PATH = f"s3://{BUCKET}/bench/ducklake/bronze/"
+DUCKLAKE_BENCH_TRANSFORM_DATA_PATH = f"s3://{BUCKET}/bench/ducklake/transform/"
+# Iceberg: each table has its own state, separate namespaces are enough
+ICEBERG_BENCH_PREFIX = "bench_"
+# Engines read their run's end offsets this often until the replay records them
+BENCH_BOUNDS_POLL_SECONDS = 10
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
@@ -304,6 +323,11 @@ SPARK_CHECKPOINT_DIR = os.getenv("SPARK_CHECKPOINT_DIR", "state/spark-checkpoint
 # resumes its own. The last days are kept, older ones deleted
 SPARK_DAY_CHECKPOINTS_DIR = os.getenv("SPARK_DAY_CHECKPOINTS_DIR", "state/spark-checkpoint/days")
 SPARK_DAY_CHECKPOINTS_KEPT = 2
+# One checkpoint per controlled-test run (D36), on the same volume, apart from the days
+# so their pruning never sees them; deleted when the run starts again or is cleaned up
+SPARK_BENCH_CHECKPOINTS_DIR = os.getenv(
+    "SPARK_BENCH_CHECKPOINTS_DIR", "state/spark-checkpoint/bench"
+)
 # Snapshot summary property holding "<query id>:<batch id>" of each Bronze append: a
 # micro-batch replayed after a crash finds its key and is not written twice (what the
 # native Iceberg streaming sink does, redone in foreachBatch for the day bounds)

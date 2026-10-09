@@ -14,6 +14,12 @@ Every SUPERVISOR_POLL_SECONDS it reads the calendar (it never writes a decision)
 - still running at 06:30 the next morning (hard stop, before the next opening): stop
   it, day incomplete (end offsets not reached, or the day was never closed).
 
+Controlled test (decision D36): with no day of its branch active, a requested or
+running run of `bench_runs` for the branch starts the engine with BENCH_RUN set instead
+(src.benchmark.runs); it is stopped once the run is no longer active, or as soon as a
+day of the branch becomes active (a day always wins). Reading `bench_runs` never blocks
+the days: on an error the supervisor acts as if no run were requested.
+
 It never starts an engine without a confirmed row, and keeps the current state when
 Postgres is unreachable. SIGTERM (redeploy, container stop) is passed to the engine,
 which flushes and commits before exiting; the day goes on after the restart.
@@ -41,6 +47,7 @@ from loguru import logger
 from src import config
 from src.alternation import calendar as cal
 from src.alternation.engine import DAY_ENV
+from src.benchmark import runs as bench_runs
 from src.healthcheck import touch
 
 # Time the engine gets to flush and commit after SIGTERM (compose stop_grace_period: 30 s)
@@ -58,6 +65,7 @@ class Supervisor:
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         restart_delay: float = config.SUPERVISOR_RESTART_DELAY_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        bench: Callable[[], bench_runs.BenchStore] | None = None,
     ) -> None:
         if branch not in cal.BRANCHES:
             raise ValueError(f"Unknown branch {branch!r}")
@@ -65,6 +73,10 @@ class Supervisor:
         self.command = command
         self._store_factory = store
         self._store: cal.CalendarStore | None = None
+        self._bench_factory = bench
+        self._bench: bench_runs.BenchStore | None = None
+        # Controlled-test run the engine works on (None: a day, or nothing)
+        self.run_id: int | None = None
         self._now = now
         self._monotonic = monotonic
         self._restart_delay = restart_delay
@@ -84,14 +96,41 @@ class Supervisor:
             self._store = None
             raise
 
+    def _read_bench(self) -> bench_runs.BenchRunRow | None:
+        """The branch's active run, None without one or on any error: the controlled
+        test must never keep a day from starting."""
+        if self._bench_factory is None:
+            return None
+        try:
+            if self._bench is None:
+                self._bench = self._bench_factory()
+            return self._bench.active_for(self.branch)
+        except Exception as e:  # noqa: BLE001 - no run this tick, retried at the next
+            self._bench = None
+            logger.warning(f"bench_runs unreadable ({e}), no controlled-test run this tick")
+            return None
+
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
     def start(self, day: cal.CalendarDay) -> None:
         logger.info(f"Starting the branch {self.branch} engine for day {day.day}")
         env = {**os.environ, DAY_ENV: day.day.isoformat()}
+        env.pop(bench_runs.RUN_ENV, None)
         self.process = subprocess.Popen(self.command, env=env)
         self.day = day.day
+        self.run_id = None
+
+    def start_run(self, run: bench_runs.BenchRunRow) -> None:
+        logger.info(
+            f"Starting the branch {self.branch} engine for bench run {run.run_id} "
+            f"({run.rate}, repetition {run.repetition})"
+        )
+        env = {**os.environ, bench_runs.RUN_ENV: str(run.run_id)}
+        env.pop(DAY_ENV, None)
+        self.process = subprocess.Popen(self.command, env=env)
+        self.day = None
+        self.run_id = run.run_id
 
     def stop(self) -> int | None:
         """SIGTERM, then SIGKILL if the engine does not exit in time."""
@@ -116,6 +155,15 @@ class Supervisor:
         except Exception as e:  # noqa: BLE001 - keep the current state, retry next tick
             logger.warning(f"Calendar unreachable ({e}), keeping the current state")
             return
+        run = self._read_bench() if day is None else None
+        if self.running() and self.run_id is not None:
+            if day is not None or run is None or run.run_id != self.run_id:
+                why = f"day {day.day} is active" if day is not None else "it is over"
+                logger.info(f"Bench run {self.run_id}: stopping, {why}")
+                self.stop()
+                self.process = None
+                self.run_id = None
+            return
         if self.running():
             if day is None or day.day != self.day:
                 logger.info(f"Day {self.day} is no longer active for {self.branch}: stopping")
@@ -137,11 +185,14 @@ class Supervisor:
                 logger.warning(f"Day {day.day}: still running at 19:30, late, going on")
                 self._calendar().mark_late(day.day)
             return
-        if day is None or day.stopped_at is not None:
-            return
         if self._monotonic() - self._exited_at < self._restart_delay:
             return
-        self.start(day)
+        if day is not None:
+            if day.stopped_at is None:
+                self.start(day)
+            return
+        if run is not None:
+            self.start_run(run)
 
     def run(self, poll_seconds: float = config.SUPERVISOR_POLL_SECONDS) -> None:
         stopping = False
@@ -204,8 +255,12 @@ def main(argv: list[str] | None = None) -> None:
         args = [args[0], *args[2:]]
     if len(args) < 3 or args[1] != "--":
         raise SystemExit(USAGE)
-    kind = ServiceSupervisor if service else Supervisor
-    kind(args[0], args[2:], store=lambda: cal.CalendarStore(cal.connect_benchmark())).run()
+    store = lambda: cal.CalendarStore(cal.connect_benchmark())  # noqa: E731
+    if service:
+        ServiceSupervisor(args[0], args[2:], store=store).run()
+        return
+    bench = lambda: bench_runs.BenchStore(cal.connect_benchmark())  # noqa: E731
+    Supervisor(args[0], args[2:], store=store, bench=bench).run()
 
 
 if __name__ == "__main__":
