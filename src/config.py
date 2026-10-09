@@ -254,8 +254,9 @@ BENCH_SAMPLE_TOPIC = "bench_raw_events_sample"
 # Copied after the fact while raw_events still holds it (24 h retention)
 BENCH_SAMPLE_START = "2026-10-09T19:30:00+02:00"
 BENCH_SAMPLE_MINUTES = 20
-# One run only, at this date (Europe/Paris); skipped once the sample topic exists
-BENCH_SAMPLE_CRON = "0 9 10 10 *"
+# One run only, at this date (Europe/Paris): 21:00, after the DuckDB day's close and its
+# last Silver/Gold runs, when nothing is measured; skipped once the sample topic exists
+BENCH_SAMPLE_CRON = "0 21 9 10 *"
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
