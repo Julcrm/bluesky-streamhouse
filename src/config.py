@@ -143,7 +143,10 @@ RETENTION_TIME_COLUMNS = ("event_time", "minute", "hour")
 # Nightly, outside the 07:00-19:00 window of the branches (D10)
 MAINTENANCE_CRON = "0 2 * * *"
 # DuckLake options persisted by set_option, applied by CHECKPOINT (D21): 24 h of time
-# travel, files kept 1 h after they stop being used (a running scan may still read them)
+# travel, files kept 1 h after they stop being used (a running scan may still read them).
+# The nightly maintenance then deletes every scheduled file itself (cleanup_all): it runs
+# one night in two (D28) and nothing reads at 02:00, so files freed by its own CHECKPOINT
+# go the same night instead of two DuckDB nights later (~4 nights for a dropped day)
 DUCKLAKE_EXPIRE_OLDER_THAN = "1 day"
 DUCKLAKE_DELETE_OLDER_THAN = "1 hour"
 DUCKLAKE_TARGET_FILE_SIZE = "512MB"
