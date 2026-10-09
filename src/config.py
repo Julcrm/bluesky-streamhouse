@@ -324,6 +324,10 @@ ICEBERG_MAINTENANCE_CRON = "30 2 * * *"
 # 5 s leaves ~720 small data files an hour (~1 250 rows each), each one a signed S3 read
 # for every Silver pass and test. At :50, between two Silver/Gold ticks (:45 and :00)
 ICEBERG_HOURLY_COMPACTION_CRON = "50 * * * *"
+# Spark days without the hourly compaction (Europe/Paris dates), to measure what it is
+# worth once the Silver dedup and test read only their event_time range (D33 questioned
+# on 2026-10-09): 10/10 with it, 12/10 without, then keep or drop it on the figures
+ICEBERG_HOURLY_COMPACTION_OFF_DAYS = ("2026-10-12",)
 # Time travel kept: 24 h, as DuckLake (D21). With a commit every 5 s, ~17 000 snapshots
 # stay listed in every metadata.json: their cost is measured, not avoided (H8)
 ICEBERG_SNAPSHOT_RETENTION_HOURS = 24

@@ -13,6 +13,7 @@ One run at a time in this location (D30): the Thrift server is shared.
 
 import time
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from dagster import (
     AssetExecutionContext,
@@ -273,7 +274,11 @@ iceberg_compaction_job = define_asset_job(
 )
 def iceberg_compaction_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
     """Every hour at :50 while the Spark branch's Silver/Gold is due (its engine runs, or
-    stopped less than an hour ago): the Thrift server is up then. One at a time."""
+    stopped less than an hour ago): the Thrift server is up then. One at a time. Skipped
+    on the dates of ICEBERG_HOURLY_COMPACTION_OFF_DAYS (measured without it, D33)."""
+    today = datetime.now(ZoneInfo(config.DAGSTER_TIMEZONE)).date().isoformat()
+    if today in config.ICEBERG_HOURLY_COMPACTION_OFF_DAYS:
+        return SkipReason(f"No hourly compaction on {today}: measured without it (D33)")
     days = monitor.recent_days()
     due = monitor.transform_due(days, cal.BRANCH_SPARK, datetime.now(UTC)) if days else None
     if due is None:
