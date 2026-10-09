@@ -3,7 +3,9 @@
 
 import subprocess
 import sys
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from dagster import (
@@ -340,3 +342,21 @@ def test_hourly_compaction_on_spark_days_only(monkeypatch, days, expected) -> No
     with instance_for_test() as instance:
         result = iceberg_compaction_schedule(build_schedule_context(instance=instance))
     assert isinstance(result, expected)
+
+
+def test_hourly_compaction_skipped_on_its_off_days(monkeypatch) -> None:
+    """A Spark day listed in ICEBERG_HOURLY_COMPACTION_OFF_DAYS runs without it (D33)."""
+    from datetime import date
+
+    from src import config
+    from src.alternation import calendar as cal
+    from src.dagster.spark_definitions import iceberg_compaction_schedule
+
+    row = cal.CalendarDay(date(2026, 10, 8), "spark", None, {0: 0}, None, "watermark", cal.OPEN)
+    monkeypatch.setattr("src.alternation.monitor.recent_days", lambda: [row])
+    today = datetime.now(ZoneInfo(config.DAGSTER_TIMEZONE)).date().isoformat()
+    monkeypatch.setattr(config, "ICEBERG_HOURLY_COMPACTION_OFF_DAYS", (today,))
+    with instance_for_test() as instance:
+        result = iceberg_compaction_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, SkipReason)
+    assert "measured without it" in result.skip_message
