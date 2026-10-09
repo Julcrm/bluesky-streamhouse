@@ -61,7 +61,12 @@ def wait_for_day_end(branch: str, log, timeout: float = DAY_END_TIMEOUT_SECONDS)
         time.sleep(DAY_END_POLL_SECONDS)
 
 
-def bench_night_definitions(branch: str, clean: Callable[[], None], transform: Transform):
+def bench_night_definitions(
+    branch: str,
+    clean: Callable[[], None],
+    transform: Transform,
+    arrivals: Callable[[], list[tuple[int, int, int]]],
+):
     """The night job and schedule of `branch`."""
 
     @op(name=f"{branch}_bench_night")
@@ -79,7 +84,9 @@ def bench_night_definitions(branch: str, clean: Callable[[], None], transform: T
         try:
             summary = controlled.run_night(
                 controlled.Tools(store=runs.BenchStore(conn)),
-                controlled.BenchBranch(branch, clean, lambda: transform(dbt, context.log)),
+                controlled.BenchBranch(
+                    branch, clean, lambda: transform(dbt, context.log), arrivals
+                ),
                 tonight().date(),
             )
         finally:
@@ -184,3 +191,33 @@ def spark_transform(logged_backlog: Callable) -> Transform:
         return controlled.Transformed(passes=passes)
 
     return transform
+
+
+# Bench Bronze arrivals: (partition, offset, first processed_at in epoch ms) per message
+ARRIVALS_SQL = (
+    "SELECT kafka_partition, kafka_offset, {epoch_ms}(min(processed_at)) "
+    "FROM {table} GROUP BY kafka_partition, kafka_offset"
+)
+
+
+def duckdb_arrivals() -> list[tuple[int, int, int]]:
+    """From the bench Bronze catalog of the DuckDB branch."""
+    from src.processing.bronze import BRONZE_TABLE
+    from src.resources.ducklake import DuckLakeSettings, bench_settings, connect
+
+    settings = bench_settings(DuckLakeSettings())
+    conn = connect(settings, read_only=True)
+    try:
+        table = f"{settings.alias}.main.{BRONZE_TABLE}"
+        return conn.execute(ARRIVALS_SQL.format(epoch_ms="epoch_ms", table=table)).fetchall()
+    finally:
+        conn.close()
+
+
+def spark_arrivals() -> list[tuple[int, int, int]]:
+    """From the bench Bronze namespace of the Spark branch, through the Thrift server."""
+    from src.processing.spark.stream_job import BENCH_BRONZE_IDENTIFIER
+    from src.resources import thrift
+
+    rows = thrift.query(ARRIVALS_SQL.format(epoch_ms="unix_millis", table=BENCH_BRONZE_IDENTIFIER))
+    return [(int(p), int(o), int(ms)) for p, o, ms in rows]

@@ -41,6 +41,9 @@ class _Store:
     def record_transform(self, run_id, started, finished, passes):
         self.rows[run_id] = replace(self.rows[run_id], transform_passes=passes)
 
+    def record_measures(self, run_id, measures):
+        self.rows[run_id] = replace(self.rows[run_id], bronze_messages=measures["messages"])
+
     def finish(self, run_id, status, now, note=None):
         self.rows[run_id] = replace(self.rows[run_id], status=status, note=note)
 
@@ -75,14 +78,21 @@ def _night(store: _Store, start: datetime = EVENING, fail_clean: bool = False):
         calls.append(("transform",))
         return controlled.Transformed(passes=2)
 
+    def measure(_store, row, arrivals):
+        calls.append(("measure", row.rate, len(arrivals)))
+        return {"messages": len(arrivals)}
+
     tools = controlled.Tools(
         store=store,
         now=lambda: clock["now"],
         sleep=sleep,
         reset_topic=lambda: calls.append(("reset",)),
         replay=replay,
+        measure=measure,
     )
-    branch = controlled.BenchBranch("duckdb", clean, transform)
+    branch = controlled.BenchBranch(
+        "duckdb", clean, transform, lambda: [(0, i, 1000 + i) for i in range(30)]
+    )
     return tools, branch, calls, clock
 
 
@@ -104,7 +114,14 @@ def test_paced_run_waits_for_the_engine_then_replays() -> None:
     row = controlled.run_once(tools, branch, NIGHT, "4x", 1, controlled.night_deadline(NIGHT))
     assert row.status == runs.DONE
     assert row.end_offsets == END and row.replay_messages == 30 and row.transform_passes == 2
-    assert calls == [("clean",), ("reset",), ("replay", 4.0), ("transform",)]
+    assert calls == [
+        ("clean",),
+        ("reset",),
+        ("replay", 4.0),
+        ("transform",),
+        ("measure", "4x", 30),
+    ]
+    assert row.bronze_messages == 30
 
 
 def test_max_run_fills_the_topic_before_the_engine_starts() -> None:
@@ -206,7 +223,7 @@ def test_night_schedule_runs_after_its_own_day_only(monkeypatch) -> None:
     monkeypatch.setattr(cal, "connect_benchmark", _Conn)
     monkeypatch.setattr(cal.CalendarStore, "__init__", lambda self, conn: None)
     monkeypatch.setattr(cal.CalendarStore, "get", get)
-    _, schedule = bench.bench_night_definitions("duckdb", lambda: None, lambda d, log: None)
+    _, schedule = bench.bench_night_definitions("duckdb", lambda: None, lambda d, log: None, list)
     assert isinstance(schedule(build_schedule_context()), SkipReason)
     owner["branch"] = "duckdb"
     request = schedule(build_schedule_context())

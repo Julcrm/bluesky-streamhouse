@@ -36,7 +36,7 @@ from src.alternation import calendar as cal
 from src.alternation import monitor
 from src.benchmark.cleanup import drop_iceberg_bench
 from src.dagster.alerts import failure_alert_sensor
-from src.dagster.bench import bench_night_definitions, spark_transform
+from src.dagster.bench import bench_night_definitions, spark_arrivals, spark_transform
 from src.dagster.housekeeping import housekeeping_asset
 from src.dagster.runs import active_location_runs, wait_for_runs
 from src.dagster.spark_alternation import (
@@ -356,7 +356,7 @@ def spark_nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequ
 
 # Controlled test (D36): the night after a Spark day, on the bench namespaces
 spark_bench_job, spark_bench_schedule = bench_night_definitions(
-    cal.BRANCH_SPARK, drop_iceberg_bench, spark_transform(logged_backlog)
+    cal.BRANCH_SPARK, drop_iceberg_bench, spark_transform(logged_backlog), spark_arrivals
 )
 
 

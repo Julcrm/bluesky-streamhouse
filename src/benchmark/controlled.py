@@ -13,7 +13,8 @@ A run:
 4. waits until the engine has written every replayed message (`ingested`): the
    supervisor then stops the engine;
 5. runs Silver/Gold on the bench tables (passes until nothing is left, then the tests);
-6. closes the run `done`. Any error closes it `failed` and the night goes on.
+6. measures the run (src/benchmark/run_measures.py: the branch hands in its bench Bronze
+   arrivals) and closes it `done`. Any error closes it `failed` and the night goes on.
 
 A run is started only if its estimate fits before the night's deadline (01:30): the
 runs that do not fit are skipped. Kept free of Dagster and of each engine: the branch
@@ -42,11 +43,21 @@ class Transformed:
 
 @dataclass(frozen=True)
 class BenchBranch:
-    """What a night needs from a branch: empty its bench tables, run Silver/Gold."""
+    """What a night needs from a branch: empty its bench tables, run Silver/Gold, read
+    its bench Bronze arrivals (partition, offset, first processed_at in ms)."""
 
     branch: str
     clean: Callable[[], None]
     transform: Callable[[], Transformed]
+    arrivals: Callable[[], list[tuple[int, int, int]]]
+
+
+def _measure(store: runs.BenchStore, row: runs.BenchRunRow, arrivals: list) -> dict:
+    """The run's measures, with the replay topic's send times (1x and 4x only)."""
+    from src.benchmark import run_measures
+
+    sends = run_measures.send_times() if row.rate != "max" else None
+    return run_measures.measure_run(store.connection, row, arrivals, sends)
 
 
 @dataclass
@@ -58,6 +69,7 @@ class Tools:
     sleep: Callable[[float], None] = time.sleep
     reset_topic: Callable[[], None] = rp.reset_bench_topic
     replay: Callable[[float | None], rp.ReplayResult] = rp.replay
+    measure: Callable[[runs.BenchStore, runs.BenchRunRow, list], dict] = _measure
 
 
 def night_plan(night: date) -> list[tuple[str, int]]:
@@ -145,6 +157,9 @@ def run_once(
         transform_started = tools.now()
         transformed = branch.transform()
         store.record_transform(run_id, transform_started, tools.now(), transformed.passes)
+        tools.sleep(config.BENCH_MEASURE_DELAY_SECONDS)
+        measures = tools.measure(store, store.get(run_id), branch.arrivals())
+        store.record_measures(run_id, measures)
         store.finish(run_id, runs.DONE, tools.now())
     except Exception as e:  # noqa: BLE001 - the run fails, the night goes on
         logger.error(f"Bench {branch.branch} {night} {rate} #{repetition} failed: {e}")

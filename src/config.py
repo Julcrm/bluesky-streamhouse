@@ -296,6 +296,9 @@ BENCH_START_TIMEOUT_SECONDS = 600
 BENCH_MAX_REPLAY_ESTIMATE_SECONDS = 180
 BENCH_TRANSFORM_ESTIMATE_SECONDS = {"duckdb": 300, "spark": 900}
 BENCH_RUN_MARGIN_SECONDS = 300
+# After Silver/Gold, before measuring: the collector (every 10 s) must have sampled past
+# the end of the phase for the integrals to cover it
+BENCH_MEASURE_DELAY_SECONDS = 15
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks

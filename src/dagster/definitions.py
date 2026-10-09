@@ -32,7 +32,7 @@ from src.dagster.alternation import (
     open_day_schedule,
 )
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
-from src.dagster.bench import bench_night_definitions, duckdb_transform
+from src.dagster.bench import bench_night_definitions, duckdb_arrivals, duckdb_transform
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.runs import active_location_runs, blocks_schedule
@@ -145,7 +145,10 @@ def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | 
 
 # Controlled test (D36): the night after a DuckDB day, on the bench catalogs
 duckdb_bench_job, duckdb_bench_schedule = bench_night_definitions(
-    cal.BRANCH_DUCKDB, drop_ducklake_bench, duckdb_transform(dbt_project.manifest_path)
+    cal.BRANCH_DUCKDB,
+    drop_ducklake_bench,
+    duckdb_transform(dbt_project.manifest_path),
+    duckdb_arrivals,
 )
 
 
