@@ -199,6 +199,15 @@ class MessageWindow:
 
 # --- Bronze queries, one per engine: same contract (distinct offsets of the day, first
 # copy, exact percentiles), different SQL dialects ---
+#
+# Percentiles come from a histogram of latencies in whole milliseconds, not from
+# quantile_cont / percentile: Spark's exact `percentile` keeps every value of a group in
+# the JVM heap (a catch-up window holds millions), and the Thrift server died of it on
+# 2026-10-08. Counting by (window, latency) is a plain aggregation that spills to disk.
+# The result is the same linear interpolation as quantile_cont: at the 0-based position
+# h = (n - 1) * q, lo = value of rank floor(h), hi = value of rank ceil(h),
+# p = lo + (h - floor(h)) * (hi - lo); the value of rank k is the first latency whose
+# running count exceeds k. The histogram SQL is shared, the first copy is per dialect.
 
 
 def _day_offsets(day: cal.CalendarDay) -> str:
@@ -211,6 +220,52 @@ def _day_offsets(day: cal.CalendarDay) -> str:
     )
 
 
+def _percentiles_from(latencies: str) -> str:
+    """Rest of the query over `latencies` (window_epoch, collection, latency_ms): rows of
+    window start, collection (NULL for the total), messages, p50, p95. Valid in DuckDB
+    and Spark SQL."""
+    return f"""
+        by_collection AS (
+            SELECT window_epoch, collection, latency_ms, count(*) AS n
+            FROM {latencies}
+            GROUP BY window_epoch, collection, latency_ms
+        ),
+        histogram AS (
+            SELECT window_epoch, collection, latency_ms, n FROM by_collection
+            UNION ALL
+            SELECT window_epoch, NULL AS collection, latency_ms, sum(n) AS n
+            FROM by_collection
+            GROUP BY window_epoch, latency_ms
+        ),
+        running AS (
+            SELECT window_epoch, collection, latency_ms,
+                   sum(n) OVER (PARTITION BY window_epoch, collection ORDER BY latency_ms
+                                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum,
+                   sum(n) OVER (PARTITION BY window_epoch, collection) AS total
+            FROM histogram
+        ),
+        ranks AS (
+            SELECT window_epoch, collection, latency_ms, cum, total,
+                   (total - 1) * 0.5 AS h50, (total - 1) * 0.95 AS h95
+            FROM running
+        ),
+        bounds AS (
+            SELECT window_epoch, collection, max(total) AS messages,
+                   max(h50) AS h50, max(h95) AS h95,
+                   min(CASE WHEN cum > floor(h50) THEN latency_ms END) AS lo50,
+                   min(CASE WHEN cum > ceil(h50) THEN latency_ms END) AS hi50,
+                   min(CASE WHEN cum > floor(h95) THEN latency_ms END) AS lo95,
+                   min(CASE WHEN cum > ceil(h95) THEN latency_ms END) AS hi95
+            FROM ranks
+            GROUP BY window_epoch, collection
+        )
+        SELECT window_epoch, collection, messages,
+               lo50 + (h50 - floor(h50)) * (hi50 - lo50) AS p50,
+               lo95 + (h95 - floor(h95)) * (hi95 - lo95) AS p95
+        FROM bounds
+    """
+
+
 def messages_query_duckdb(table: str, day: cal.CalendarDay) -> str:
     """Rows: window start (epoch s), collection, messages, p50 and p95 latency (ms)."""
     return f"""
@@ -219,35 +274,33 @@ def messages_query_duckdb(table: str, day: cal.CalendarDay) -> str:
                    min(event_time) AS event_time, any_value(collection) AS collection
             FROM {table} WHERE {_day_offsets(day)}
             GROUP BY kafka_partition, kafka_offset
-        )
-        SELECT epoch(processed_at)::BIGINT // {int(WINDOW.total_seconds())}
-                   * {int(WINDOW.total_seconds())} AS window_epoch,
-               collection, count(*) AS messages,
-               quantile_cont(epoch_ms(processed_at) - epoch_ms(event_time), 0.5) AS p50,
-               quantile_cont(epoch_ms(processed_at) - epoch_ms(event_time), 0.95) AS p95
-        FROM first_copy
-        GROUP BY GROUPING SETS ((window_epoch), (window_epoch, collection))
+        ),
+        latencies AS (
+            SELECT floor(epoch(processed_at))::BIGINT // {int(WINDOW.total_seconds())}
+                       * {int(WINDOW.total_seconds())} AS window_epoch,
+                   collection, epoch_ms(processed_at) - epoch_ms(event_time) AS latency_ms
+            FROM first_copy
+        ),
+        {_percentiles_from("latencies")}
     """
 
 
 def messages_query_spark(table: str, day: cal.CalendarDay) -> str:
-    """Same as messages_query_duckdb, in Spark SQL (exact `percentile`, not the approx)."""
+    """Same as messages_query_duckdb, in Spark SQL (whole milliseconds, as epoch_ms)."""
     return f"""
         WITH first_copy AS (
             SELECT kafka_partition, kafka_offset, min(processed_at) AS processed_at,
                    min(event_time) AS event_time, first(collection) AS collection
             FROM {table} WHERE {_day_offsets(day)}
             GROUP BY kafka_partition, kafka_offset
-        )
-        SELECT div(unix_timestamp(processed_at), {int(WINDOW.total_seconds())})
-                   * {int(WINDOW.total_seconds())} AS window_epoch,
-               collection, count(*) AS messages,
-               percentile((unix_micros(processed_at) - unix_micros(event_time)) / 1000.0, 0.5)
-                   AS p50,
-               percentile((unix_micros(processed_at) - unix_micros(event_time)) / 1000.0, 0.95)
-                   AS p95
-        FROM first_copy
-        GROUP BY GROUPING SETS ((window_epoch), (window_epoch, collection))
+        ),
+        latencies AS (
+            SELECT div(unix_timestamp(processed_at), {int(WINDOW.total_seconds())})
+                       * {int(WINDOW.total_seconds())} AS window_epoch,
+                   collection, unix_millis(processed_at) - unix_millis(event_time) AS latency_ms
+            FROM first_copy
+        ),
+        {_percentiles_from("latencies")}
     """
 
 

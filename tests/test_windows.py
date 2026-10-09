@@ -120,6 +120,39 @@ def test_messages_query_in_duckdb_counts_distinct_offsets_of_the_day() -> None:
     assert result[T0 + timedelta(minutes=5)].messages == 1
 
 
+def test_histogram_percentiles_equal_quantile_cont() -> None:
+    """The histogram (which keeps Spark's heap bounded) gives exactly quantile_cont over
+    the same whole-millisecond latencies, ties and odd sizes included."""
+    conn = duckdb.connect()
+    conn.execute(
+        "CREATE TABLE bronze AS SELECT 0 AS kafka_partition, i::BIGINT AS kafka_offset, "
+        "CASE WHEN i % 3 = 0 THEN 'post' ELSE 'like' END AS collection, "
+        "TIMESTAMPTZ '2026-10-08 12:00:00+00' + INTERVAL (i) SECOND AS event_time, "
+        "TIMESTAMPTZ '2026-10-08 12:00:00+00' + INTERVAL (i) SECOND "
+        "+ INTERVAL ((hash(i) % 5000)::INT) MILLISECOND AS processed_at "
+        "FROM range(997) t(i)"
+    )
+    day = _day(start_offsets={0: 0}, end_offsets={0: 997})
+    got = w.message_windows(conn.execute(w.messages_query_duckdb("bronze", day)).fetchall())
+    expected = conn.execute(
+        "SELECT floor(epoch(processed_at))::BIGINT // 300 * 300, collection, count(*), "
+        "quantile_cont(epoch_ms(processed_at) - epoch_ms(event_time), 0.5), "
+        "quantile_cont(epoch_ms(processed_at) - epoch_ms(event_time), 0.95) "
+        "FROM bronze GROUP BY GROUPING SETS ((1), (1, 2))"
+    ).fetchall()
+    assert len(got) >= 3
+    for window_epoch, collection, messages, p50, p95 in expected:
+        window = got[datetime.fromtimestamp(window_epoch, UTC)]
+        if collection is None:
+            assert (window.messages, window.latency_p50_ms, window.latency_p95_ms) == (
+                messages,
+                pytest.approx(p50),
+                pytest.approx(p95),
+            )
+        else:
+            assert window.collections[collection] == messages
+
+
 def test_ratio_view_only_uses_clean_windows() -> None:
     view = w.DDL[-1]
     assert "NOT b.host_contaminated AND NOT s.restarted" in view
