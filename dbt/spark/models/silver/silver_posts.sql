@@ -9,9 +9,11 @@
 -- Output      : lakekeeper.silver.silver_posts, partitioned by days(event_time)
 -- =============================================================================
 
+{%- set batch = bronze_batch() %}
+
 WITH bronze AS (
     SELECT *
-    FROM {{ bronze_new_rows() }} AS b
+    FROM {{ batch.rows }} AS b
     WHERE collection = 'app.bsky.feed.post'
       AND operation IN ('create', 'update')
 ),
@@ -75,7 +77,7 @@ typed AS (
 ),
 
 deduplicated AS (
-    {{ deduplicate_on_seq('typed') }}
+    {{ deduplicate_on_seq('typed', batch) }}
 )
 
 SELECT * FROM deduplicated

@@ -8,9 +8,11 @@
 -- Output      : lakekeeper.silver.silver_deletes, partitioned by days(event_time)
 -- =============================================================================
 
+{%- set batch = bronze_batch() %}
+
 WITH bronze AS (
     SELECT *
-    FROM {{ bronze_new_rows() }} AS b
+    FROM {{ batch.rows }} AS b
     WHERE operation = 'delete'
 ),
 
@@ -28,7 +30,7 @@ typed AS (
 ),
 
 deduplicated AS (
-    {{ deduplicate_on_seq('typed') }}
+    {{ deduplicate_on_seq('typed', batch) }}
 )
 
 SELECT * FROM deduplicated
