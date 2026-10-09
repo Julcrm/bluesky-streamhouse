@@ -226,6 +226,7 @@ def _store():
         pytest.skip("local stack not running (make up)")
     conn = cal.connect_benchmark()
     with conn.cursor() as cur:
+        cur.execute("DROP VIEW IF EXISTS bench_ratios")
         cur.execute("DROP TABLE IF EXISTS bench_runs")
     store = runs.BenchStore(conn)
     store.ensure_table()
@@ -249,5 +250,6 @@ def test_store_lifecycle_of_a_run() -> None:
         assert store.get(run.run_id).status == runs.DONE
     finally:
         with conn.cursor() as cur:
+            cur.execute("DROP VIEW IF EXISTS bench_ratios")
             cur.execute("DROP TABLE IF EXISTS bench_runs")
         conn.close()

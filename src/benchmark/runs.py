@@ -21,6 +21,7 @@ Status of a run:
     failed     stopped on an error, or past the night's deadline (incomplete)
 """
 
+import json
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -41,6 +42,17 @@ DONE, FAILED = "done", "failed"
 # A run in these statuses may have an engine running: never two at a time per branch
 ACTIVE_STATUSES = (REQUESTED, RUNNING)
 RATES = ("1x", "4x", "max")
+MEASURE_COLUMNS = (
+    "bronze_messages",
+    "first_processed_at",
+    "last_processed_at",
+    "throughput_msg_s",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_relevant",
+    "ingest_usage",
+    "transform_usage",
+)
 
 DDL = f"""
 CREATE TABLE IF NOT EXISTS bench_runs (
@@ -66,9 +78,57 @@ CREATE TABLE IF NOT EXISTS bench_runs (
     transform_started_at    TIMESTAMPTZ,
     transform_finished_at   TIMESTAMPTZ,
     transform_passes        INTEGER,
+    -- Measures (src/benchmark/run_measures.py): from the bench Bronze, then per phase
+    -- and per layer from the collector's samples; ratios in the view bench_ratios
+    bronze_messages         BIGINT,
+    first_processed_at      TIMESTAMPTZ,
+    last_processed_at       TIMESTAMPTZ,
+    throughput_msg_s        DOUBLE PRECISION,
+    latency_p50_ms          DOUBLE PRECISION,
+    latency_p95_ms          DOUBLE PRECISION,
+    latency_relevant        BOOLEAN,
+    ingest_usage            JSONB,
+    transform_usage         JSONB,
     note            TEXT,
     UNIQUE (branch, night, rate, repetition)
 )
+"""
+
+# Per-message ratios of the measured runs: ingestion costs of the streaming engine
+# (the code server replays during that phase, so it is left out), Silver/Gold costs of
+# the transform and catalog layers. A formula changes here without recomputing anything
+VIEW = f"""
+CREATE OR REPLACE VIEW bench_ratios AS
+WITH usage AS (
+    SELECT r.*,
+           (r.ingest_usage -> 'streaming' ->> 'cpu_ms')::float AS ingest_cpu_ms,
+           (r.ingest_usage -> 'streaming' ->> 'ram_mib_s')::float AS ingest_ram_mib_s,
+           (r.ingest_usage -> 'streaming' ->> 'peak_anon_mib')::float AS ingest_peak_mib,
+           coalesce((r.transform_usage -> 'transform' ->> 'cpu_ms')::float, 0)
+             + coalesce((r.transform_usage -> 'catalog' ->> 'cpu_ms')::float, 0)
+             AS transform_cpu_ms,
+           coalesce((r.transform_usage -> 'transform' ->> 'ram_mib_s')::float, 0)
+             + coalesce((r.transform_usage -> 'catalog' ->> 'ram_mib_s')::float, 0)
+             AS transform_ram_mib_s,
+           extract(epoch FROM r.transform_finished_at - r.transform_started_at)
+             AS transform_seconds
+    FROM bench_runs AS r
+    WHERE r.status = '{DONE}'
+)
+SELECT run_id, branch, night, rate, repetition, bronze_messages, throughput_msg_s,
+       CASE WHEN latency_relevant THEN latency_p50_ms END AS latency_p50_ms,
+       CASE WHEN latency_relevant THEN latency_p95_ms END AS latency_p95_ms,
+       ingest_cpu_ms / nullif(bronze_messages, 0) AS ingest_cpu_ms_per_message,
+       ingest_ram_mib_s * 10000 / nullif(bronze_messages, 0)
+         AS ingest_ram_mib_s_per_10k_messages,
+       ingest_peak_mib,
+       transform_cpu_ms / nullif(bronze_messages, 0) AS transform_cpu_ms_per_message,
+       transform_ram_mib_s * 10000 / nullif(bronze_messages, 0)
+         AS transform_ram_mib_s_per_10k_messages,
+       transform_seconds,
+       bronze_messages / nullif(transform_seconds, 0) AS transform_rows_per_s,
+       transform_passes
+FROM usage
 """
 
 
@@ -93,6 +153,15 @@ class BenchRunRow:
     transform_started_at: datetime | None = None
     transform_finished_at: datetime | None = None
     transform_passes: int | None = None
+    bronze_messages: int | None = None
+    first_processed_at: datetime | None = None
+    last_processed_at: datetime | None = None
+    throughput_msg_s: float | None = None
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    latency_relevant: bool | None = None
+    ingest_usage: dict | None = None
+    transform_usage: dict | None = None
     note: str | None = None
 
 
@@ -111,6 +180,11 @@ class BenchStore:
     def __init__(self, conn) -> None:
         self._conn = conn
 
+    @property
+    def connection(self):
+        """The benchmark database session (the measures read the samples with it)."""
+        return self._conn
+
     @contextmanager
     def _transaction(self) -> Iterator:
         with self._conn:  # commits, or rolls back on error (autocommit is restored)
@@ -120,6 +194,7 @@ class BenchStore:
     def ensure_table(self) -> None:
         with self._transaction() as cur:
             cur.execute(DDL)
+            cur.execute(VIEW)
 
     def get(self, run_id: int) -> BenchRunRow | None:
         with self._transaction() as cur:
@@ -165,7 +240,9 @@ class BenchStore:
                 "end_offsets = EXCLUDED.end_offsets, started_at = NULL, ingested_at = NULL, "
                 "finished_at = NULL, replay_started_at = NULL, replay_finished_at = NULL, "
                 "replay_messages = NULL, transform_started_at = NULL, "
-                "transform_finished_at = NULL, transform_passes = NULL, note = NULL "
+                "transform_finished_at = NULL, transform_passes = NULL, note = NULL, "
+                + ", ".join(f"{column} = NULL" for column in MEASURE_COLUMNS)
+                + " "
                 "RETURNING *",
                 (branch, night, rate, repetition, REQUESTED, now, end),
             )
@@ -189,6 +266,22 @@ class BenchStore:
                 "UPDATE bench_runs SET transform_started_at = %s, transform_finished_at = %s, "
                 "transform_passes = %s WHERE run_id = %s",
                 (started, finished, passes, run_id),
+            )
+
+    def record_measures(self, run_id: int, measures: dict) -> None:
+        """Measures of a run (src/benchmark/run_measures.py); usages stored as JSON."""
+        values = {
+            k: json.dumps(v) if k.endswith("_usage") else v
+            for k, v in measures.items()
+            if k in MEASURE_COLUMNS
+        }
+        if not values:
+            return
+        assignments = ", ".join(f"{column} = %s" for column in values)
+        with self._transaction() as cur:
+            cur.execute(
+                f"UPDATE bench_runs SET {assignments} WHERE run_id = %s",
+                (*values.values(), run_id),
             )
 
     def night(self, branch: str, night: date) -> list[BenchRunRow]:
