@@ -162,3 +162,19 @@ def test_checkpoint_gives_up_after_retries() -> None:
     with pytest.raises(duckdb.TransactionException):
         maintenance.checkpoint(conn, ALIAS, 3, 0, lambda _: None)
     assert conn.calls == 4
+
+
+def test_files_freed_by_the_checkpoint_are_deleted_the_same_night(lake) -> None:
+    """CHECKPOINT keeps the files its own expiry schedules (delete_older_than); the
+    maintenance deletes them in the same pass, not two DuckDB nights later."""
+    lake.execute(f"DELETE FROM {ALIAS}.silver.silver_likes")
+    maintenance.set_options(lake, ALIAS)
+    lake.execute(f"CALL {ALIAS}.set_option('expire_older_than', '0 seconds')")
+    maintenance.checkpoint(lake, ALIAS)
+    pending = (
+        f"SELECT count(*) FROM __ducklake_metadata_{ALIAS}.ducklake_files_scheduled_for_deletion"
+    )
+    scheduled = lake.execute(pending).fetchone()[0]
+    assert scheduled > 0
+    assert maintenance.delete_scheduled_files(lake, ALIAS) == scheduled
+    assert lake.execute(pending).fetchone()[0] == 0
