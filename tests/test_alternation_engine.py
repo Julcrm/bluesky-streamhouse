@@ -14,8 +14,8 @@ from tests.test_alternation_calendar import START, store  # noqa: F401 (fixture)
 NOW = datetime(2026, 10, 8, 5, 0, tzinfo=UTC)
 
 
-def _engine_day(store, clock=lambda: 0.0) -> EngineDay:  # noqa: F811
-    return EngineDay(START, store=lambda: store, poll_seconds=30, clock=clock)
+def _engine_day(store, clock=lambda: 0.0, **kwargs) -> EngineDay:  # noqa: F811
+    return EngineDay(START, store=lambda: store, poll_seconds=30, clock=clock, **kwargs)
 
 
 def _open(store) -> None:  # noqa: F811
@@ -41,7 +41,8 @@ def test_end_offsets_filter_once_known(store) -> None:  # noqa: F811
     """No end before 19:00: everything passes; then messages at or past the end drop."""
     _open(store)
     now = [0.0]
-    engine = _engine_day(store, clock=lambda: now[0])
+    # Before 19:00 of START: past it, the engine would wait for the end offsets
+    engine = _engine_day(store, clock=lambda: now[0], now=lambda: NOW)
     engine.prepare(lambda _: None)
     assert engine.in_bounds(0, 10_000)
     store.close_day(START, {0: 150, 1: 260}, NOW)
@@ -89,7 +90,7 @@ def test_caught_up_recorded_once_under_the_lag(store) -> None:  # noqa: F811
 def test_done_once_every_partition_reached_its_end(store) -> None:  # noqa: F811
     _open(store)
     now = [0.0]
-    engine = _engine_day(store, clock=lambda: now[0])
+    engine = _engine_day(store, clock=lambda: now[0], now=lambda: NOW)
     engine.prepare(lambda _: None)
     assert not engine.check_complete({0: 500, 1: 500})  # no end yet
     store.close_day(START, {0: 150, 1: 260}, NOW)
