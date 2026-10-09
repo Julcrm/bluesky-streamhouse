@@ -164,6 +164,20 @@ def test_a_day_always_wins_over_a_run(bench_supervisor) -> None:
     assert sup.running() and sup.day == START and sup.run_id is None
 
 
+def test_missing_bench_runs_table_means_no_run(bench_supervisor) -> None:
+    """Before the first controlled-test night the table does not exist: no run, quietly."""
+    import psycopg2.errors
+
+    sup, _, bench, _ = bench_supervisor
+
+    def missing(_branch):
+        raise psycopg2.errors.UndefinedTable("relation bench_runs does not exist")
+
+    bench.active_for = missing
+    sup.tick()
+    assert not sup.running()
+
+
 def test_unreadable_bench_runs_never_keeps_a_day_from_starting(bench_supervisor) -> None:
     sup, calendar, bench, _ = bench_supervisor
     bench.unreadable = True

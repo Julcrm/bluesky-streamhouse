@@ -276,6 +276,26 @@ DUCKLAKE_BENCH_TRANSFORM_DATA_PATH = f"s3://{BUCKET}/bench/ducklake/transform/"
 ICEBERG_BENCH_PREFIX = "bench_"
 # Engines read their run's end offsets this often until the replay records them
 BENCH_BOUNDS_POLL_SECONDS = 10
+# Nights of the controlled test (D36): Monday and Tuesday at 20:00, after the day of
+# each branch (the job of a branch runs only after its own day), over by 01:30 (the
+# DuckDB maintenance starts at 02:00)
+BENCH_NIGHT_CRON = "0 20 * * 1,2"
+BENCH_DEADLINE = "01:30"
+BENCH_REPETITIONS = 3
+# Calibration week: 1x too (it checks the replay costs the same as the live); then 4x
+# and max only. Nights up to this date (Europe/Paris) calibrate
+BENCH_CALIBRATION_UNTIL = "2026-10-13"
+# After the engine started on a 1x or 4x run, before the replay: the JVM of Spark takes
+# 30-60 s to consume, Quix a few seconds; the same wait for both keeps the start-up out
+# of the steady-state latency (start-up costs are counted in H6)
+BENCH_WARMUP_SECONDS = 60
+# The supervisor polls every 30 s and an engine may take a minute to start
+BENCH_START_TIMEOUT_SECONDS = 600
+# A run is started only if its estimate fits before the deadline: replay (sample length
+# / factor, or this for max), warm-up, ingestion tail, then Silver/Gold of the branch
+BENCH_MAX_REPLAY_ESTIMATE_SECONDS = 180
+BENCH_TRANSFORM_ESTIMATE_SECONDS = {"duckdb": 300, "spark": 900}
+BENCH_RUN_MARGIN_SECONDS = 300
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks

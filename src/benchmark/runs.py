@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS bench_runs (
     started_at      TIMESTAMPTZ,
     ingested_at     TIMESTAMPTZ,
     finished_at     TIMESTAMPTZ,
+    -- Phases, for the measures read from the collector's samples (D36): the replay
+    -- sends from replay_started_at (1x, 4x: the engine already runs; max: before it
+    -- starts), Silver/Gold run between the transform timestamps
+    replay_started_at       TIMESTAMPTZ,
+    replay_finished_at      TIMESTAMPTZ,
+    replay_messages         BIGINT,
+    transform_started_at    TIMESTAMPTZ,
+    transform_finished_at   TIMESTAMPTZ,
+    transform_passes        INTEGER,
     note            TEXT,
     UNIQUE (branch, night, rate, repetition)
 )
@@ -78,6 +87,12 @@ class BenchRunRow:
     started_at: datetime | None = None
     ingested_at: datetime | None = None
     finished_at: datetime | None = None
+    replay_started_at: datetime | None = None
+    replay_finished_at: datetime | None = None
+    replay_messages: int | None = None
+    transform_started_at: datetime | None = None
+    transform_finished_at: datetime | None = None
+    transform_passes: int | None = None
     note: str | None = None
 
 
@@ -127,19 +142,63 @@ class BenchStore:
     # Decisions: Dagster only
 
     def request(
-        self, branch: str, night: date, rate: str, repetition: int, now: datetime
+        self,
+        branch: str,
+        night: date,
+        rate: str,
+        repetition: int,
+        now: datetime,
+        end_offsets: cal.Offsets | None = None,
     ) -> BenchRunRow:
         """A new run; refused while another run of the branch is active (one at a
-        time: the engine works on a single run)."""
+        time: the engine works on a single run). A run at "max" is requested once the
+        replay filled the topic, with its end offsets already known."""
         if self.active_for(branch) is not None:
             raise cal.CalendarError(f"A run of the {branch} branch is already active")
+        end = cal.offsets_to_json(end_offsets, config.BENCH_TOPIC) if end_offsets else None
         with self._transaction() as cur:
             cur.execute(
-                "INSERT INTO bench_runs (branch, night, rate, repetition, status, requested_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
-                (branch, night, rate, repetition, REQUESTED, now),
+                "INSERT INTO bench_runs (branch, night, rate, repetition, status, requested_at, "
+                "end_offsets) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (branch, night, rate, repetition) DO UPDATE SET "
+                "status = EXCLUDED.status, requested_at = EXCLUDED.requested_at, "
+                "end_offsets = EXCLUDED.end_offsets, started_at = NULL, ingested_at = NULL, "
+                "finished_at = NULL, replay_started_at = NULL, replay_finished_at = NULL, "
+                "replay_messages = NULL, transform_started_at = NULL, "
+                "transform_finished_at = NULL, transform_passes = NULL, note = NULL "
+                "RETURNING *",
+                (branch, night, rate, repetition, REQUESTED, now, end),
             )
             return _row(cur.fetchone())
+
+    def record_replay(
+        self, run_id: int, started: datetime, finished: datetime, messages: int
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE bench_runs SET replay_started_at = %s, replay_finished_at = %s, "
+                "replay_messages = %s WHERE run_id = %s",
+                (started, finished, messages, run_id),
+            )
+
+    def record_transform(
+        self, run_id: int, started: datetime, finished: datetime, passes: int
+    ) -> None:
+        with self._transaction() as cur:
+            cur.execute(
+                "UPDATE bench_runs SET transform_started_at = %s, transform_finished_at = %s, "
+                "transform_passes = %s WHERE run_id = %s",
+                (started, finished, passes, run_id),
+            )
+
+    def night(self, branch: str, night: date) -> list[BenchRunRow]:
+        """Every run of a branch's night, in request order."""
+        with self._transaction() as cur:
+            cur.execute(
+                "SELECT * FROM bench_runs WHERE branch = %s AND night = %s ORDER BY run_id",
+                (branch, night),
+            )
+            return [_row(r) for r in cur.fetchall()]
 
     def finish(self, run_id: int, status: str, now: datetime, note: str | None = None) -> None:
         """Close a run: `done` once measured, `failed` on an error or past the deadline."""

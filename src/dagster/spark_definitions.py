@@ -34,7 +34,9 @@ from dagster_dbt import DbtCliResource
 from src import config
 from src.alternation import calendar as cal
 from src.alternation import monitor
+from src.benchmark.cleanup import drop_iceberg_bench
 from src.dagster.alerts import failure_alert_sensor
+from src.dagster.bench import bench_night_definitions, spark_transform
 from src.dagster.housekeeping import housekeeping_asset
 from src.dagster.runs import active_location_runs, wait_for_runs
 from src.dagster.spark_alternation import (
@@ -43,7 +45,7 @@ from src.dagster.spark_alternation import (
     iceberg_day_completeness,
     spark_benchmark_windows,
 )
-from src.dagster.spark_assets import dbt_project, spark_bronze, spark_dbt_models
+from src.dagster.spark_assets import dbt_project, logged_backlog, spark_bronze, spark_dbt_models
 from src.maintenance import iceberg
 from src.processing.bronze import BRONZE_TABLE
 from src.resources import thrift
@@ -352,6 +354,12 @@ def spark_nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequ
     return RunRequest(tags={"bluesky/nightly_checks_due": due})
 
 
+# Controlled test (D36): the night after a Spark day, on the bench namespaces
+spark_bench_job, spark_bench_schedule = bench_night_definitions(
+    cal.BRANCH_SPARK, drop_iceberg_bench, spark_transform(logged_backlog)
+)
+
+
 defs = Definitions(
     assets=[
         spark_bronze,
@@ -369,12 +377,14 @@ defs = Definitions(
         iceberg_maintenance_job,
         iceberg_compaction_job,
         iceberg_completeness_job,
+        spark_bench_job,
     ],
     schedules=[
         spark_silver_gold_schedule,
         spark_nightly_checks_schedule,
         iceberg_maintenance_schedule,
         iceberg_compaction_schedule,
+        spark_bench_schedule,
     ],
     sensors=[
         failure_alert_sensor(

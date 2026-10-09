@@ -62,7 +62,7 @@ def spark_bronze() -> ObserveResult:
     )
 
 
-def _logged_backlog(invocation: DbtCliInvocation) -> SparkBacklog:
+def logged_backlog(invocation: DbtCliInvocation) -> SparkBacklog:
     """The backlog a dbt command logged (log_backlog macro), once it has finished."""
     messages = (
         event.raw_event.get("info", {}).get("msg", "") for event in invocation.stream_raw_events()
@@ -106,7 +106,7 @@ def spark_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> Ite
     if silver_selected(context):
         silver_cap = silver_max_rows_per_run(config.DBT_SPARK_PROJECT_DIR)
         gold_cap = gold_max_hours_per_run(config.DBT_SPARK_PROJECT_DIR)
-        backlog = _logged_backlog(dbt.cli(["run-operation", "measure_backlog"]))
+        backlog = logged_backlog(dbt.cli(["run-operation", "measure_backlog"]))
         context.log.info(
             f"Backlog: {backlog.silver_rows} Bronze rows for Silver (cap {silver_cap} per "
             f"run), {backlog.gold_hours} hours for Gold (cap {gold_cap})"
@@ -115,7 +115,7 @@ def spark_dbt_models(context: AssetExecutionContext, dbt: DbtCliResource) -> Ite
             backlog.silver_rows > silver_cap or backlog.gold_hours > gold_cap
         ) and passes < config.CATCHUP_MAX_PASSES:
             # Not streamed: Dagster accepts a single materialization per asset and run
-            previous, backlog = backlog, _logged_backlog(dbt.cli(["run"]))
+            previous, backlog = backlog, logged_backlog(dbt.cli(["run"]))
             passes += 1
             context.log.info(
                 f"Catch-up pass {passes}: {backlog.silver_rows} Bronze rows, "
