@@ -184,6 +184,17 @@ def checkpoint(
     return attempts
 
 
+def delete_scheduled_files(conn: duckdb.DuckDBPyConnection, alias: str) -> int:
+    """Delete every file scheduled for deletion, whatever its age; returns how many.
+
+    Run after CHECKPOINT, whose own cleanup skips files freed less than
+    `delete_older_than` ago, i.e. the ones its expiry has just scheduled.
+    """
+    return len(
+        conn.execute(f"CALL ducklake_cleanup_old_files('{alias}', cleanup_all => true)").fetchall()
+    )
+
+
 def stale_positions(
     conn: duckdb.DuckDBPyConnection,
     alias: str,

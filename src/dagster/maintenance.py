@@ -68,7 +68,8 @@ def _maintain(
     retention_days: dict[str, int],
     stale: dict[str, str],
 ) -> MaterializeResult:
-    """Guard, retention DELETE, options, CHECKPOINT; figures before and after."""
+    """Guard, retention DELETE, options, CHECKPOINT, scheduled files deleted; figures
+    before and after."""
     _guard(context, stale, settings.alias)
     started = time.monotonic()
     # Quix writes Bronze 24/7 until the alternation (D28): it pauses while the
@@ -89,6 +90,7 @@ def _maintain(
             checkpoint_started = time.monotonic()
             attempts = maintenance.checkpoint(conn, settings.alias)
             checkpoint_seconds = time.monotonic() - checkpoint_started
+            files_deleted = maintenance.delete_scheduled_files(conn, settings.alias)
             writers_paused_seconds = time.monotonic() - lock_started if is_bronze else 0.0
         after = maintenance.catalog_stats(conn, settings)
     finally:
@@ -102,6 +104,7 @@ def _maintain(
             "writers_paused_seconds": round(writers_paused_seconds, 1),
             "checkpoint_attempts": attempts,
             "checkpoint_seconds": round(checkpoint_seconds, 1),
+            "files_deleted": files_deleted,
             "duration_seconds": round(time.monotonic() - started, 1),
             **{f"before_{k}": v for k, v in before.as_dict().items()},
             **{f"after_{k}": v for k, v in after.as_dict().items()},
