@@ -121,10 +121,24 @@ def test_maintenance_job_loads() -> None:
     assert defs.get_sensor_def("calendar_alert_sensor") is not None
 
 
-def test_maintenance_schedule_skips_while_previous_maintenance_runs() -> None:
+def _calendar_owner(monkeypatch, owner: str | None) -> None:
+    """Calendar whose latest opened day belongs to `owner`."""
+    from src.alternation import calendar as cal
+
+    class _Conn:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cal, "connect_benchmark", _Conn)
+    monkeypatch.setattr(cal.CalendarStore, "__init__", lambda self, conn: None)
+    monkeypatch.setattr(cal.CalendarStore, "owner", lambda self: owner)
+
+
+def test_maintenance_schedule_skips_while_previous_maintenance_runs(monkeypatch) -> None:
     """Two maintenance runs would CHECKPOINT the same catalogs at once."""
     from src.dagster.definitions import defs, maintenance_job, maintenance_schedule
 
+    _calendar_owner(monkeypatch, "duckdb")
     with instance_for_test() as instance:
         assert isinstance(
             maintenance_schedule(build_schedule_context(instance=instance)), RunRequest
@@ -132,6 +146,31 @@ def test_maintenance_schedule_skips_while_previous_maintenance_runs() -> None:
         instance.create_run_for_job(
             job_def=defs.get_job_def(maintenance_job.name), status=DagsterRunStatus.STARTED
         )
+        result = maintenance_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, SkipReason)
+
+
+@pytest.mark.parametrize(("owner", "expected"), [("duckdb", RunRequest), ("spark", SkipReason)])
+def test_maintenance_only_while_duckdb_owns_the_latest_day(monkeypatch, owner, expected):
+    """After a Spark day, the previous night's own snapshots are over 24 h old and would
+    trip the guard although no reader has anything to read (2026-10-09)."""
+    from src.dagster.definitions import maintenance_schedule
+
+    _calendar_owner(monkeypatch, owner)
+    with instance_for_test() as instance:
+        result = maintenance_schedule(build_schedule_context(instance=instance))
+    assert isinstance(result, expected)
+
+
+def test_maintenance_skips_when_the_calendar_is_unreachable(monkeypatch) -> None:
+    from src.alternation import calendar as cal
+    from src.dagster.definitions import maintenance_schedule
+
+    def _down():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(cal, "connect_benchmark", _down)
+    with instance_for_test() as instance:
         result = maintenance_schedule(build_schedule_context(instance=instance))
     assert isinstance(result, SkipReason)
 
