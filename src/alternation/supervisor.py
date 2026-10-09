@@ -42,6 +42,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
+import psycopg2.errors
 from loguru import logger
 
 from src import config
@@ -105,6 +106,10 @@ class Supervisor:
             if self._bench is None:
                 self._bench = self._bench_factory()
             return self._bench.active_for(self.branch)
+        except psycopg2.errors.UndefinedTable:
+            # Created by the first controlled-test night: no table, no run requested
+            self._bench = None
+            return None
         except Exception as e:  # noqa: BLE001 - no run this tick, retried at the next
             self._bench = None
             logger.warning(f"bench_runs unreadable ({e}), no controlled-test run this tick")
