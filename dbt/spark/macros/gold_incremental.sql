@@ -18,11 +18,11 @@
 -- =============================================================================
 
 {% macro gold_progress_table() -%}
-    meta.gold_progress
+    {{ bench_prefix() }}meta.gold_progress
 {%- endmacro %}
 
 {% macro gold_pending_table() -%}
-    meta.gold_pending
+    {{ bench_prefix() }}meta.gold_pending
 {%- endmacro %}
 
 

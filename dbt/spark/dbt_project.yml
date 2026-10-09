@@ -12,7 +12,7 @@ test-paths: ["tests"]
 # Read positions of Silver and Gold, and the hours Gold still has to rebuild, live in
 # Iceberg tables of the `meta` namespace (macros/bronze_changes.sql, gold_incremental.sql)
 on-run-start:
-  - "CREATE NAMESPACE IF NOT EXISTS meta"
+  - "CREATE NAMESPACE IF NOT EXISTS {{ bench_prefix() }}meta"
   - "{{ create_silver_progress() }}"
   - "{{ create_gold_progress() }}"
   - "{{ create_gold_pending() }}"

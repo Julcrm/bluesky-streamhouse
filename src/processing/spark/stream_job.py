@@ -15,6 +15,9 @@ columns, one micro-batch every 5 s capped at 50 000 messages (decisions D10, D13
   "<query id>:<batch id>" in its snapshot summary, and a replayed batch whose key is
   already there is skipped (Silver still deduplicates on seq, the contract).
 - Checkpoint (Kafka offsets, batch ids) on a local volume: it relies on atomic renames.
+- Controlled test (decision D36): started with BENCH_RUN instead, the job works on one
+  run the same way, from the replay topic into the `bench_bronze` namespace, with a
+  fresh checkpoint per run (src.benchmark.runs).
 
 Usage: python -m src.processing.spark.stream_job (without ALTERNATION_DAY: no bounds,
 one checkpoint, from the oldest retained offset; local development)
@@ -37,12 +40,16 @@ from pyspark.sql.types import LongType, StringType, StructField, StructType
 from src import config
 from src.alternation import calendar as cal
 from src.alternation.engine import EngineDay
+from src.benchmark.runs import BenchRun
 from src.processing.bronze import BRONZE_COLUMNS, BRONZE_TABLE
 from src.resources.spark import build_session
 
 logger = logging.getLogger(__name__)
 
 BRONZE_IDENTIFIER = f"{config.SPARK_CATALOG}.{config.ICEBERG_BRONZE_NAMESPACE}.{BRONZE_TABLE}"
+# Controlled test (D36): the same table in its own namespace
+BENCH_BRONZE_NAMESPACE = f"{config.ICEBERG_BENCH_PREFIX}{config.ICEBERG_BRONZE_NAMESPACE}"
+BENCH_BRONZE_IDENTIFIER = f"{config.SPARK_CATALOG}.{BENCH_BRONZE_NAMESPACE}.{BRONZE_TABLE}"
 
 __all__ = ["BRONZE_IDENTIFIER", "bronze_ddl", "build_session", "main", "parse_raw_events"]
 
@@ -125,13 +132,16 @@ def bronze_ddl(identifier: str = BRONZE_IDENTIFIER) -> str:
     )
 
 
-def read_raw_events(spark: SparkSession, starting_offsets: str = "earliest") -> DataFrame:
-    """raw_events from `starting_offsets` (Spark's JSON, or earliest), capped per
-    micro-batch like Quix. A checkpoint that already exists ignores it and resumes."""
+def read_raw_events(
+    spark: SparkSession, starting_offsets: str = "earliest", topic: str = config.RAW_EVENTS_TOPIC
+) -> DataFrame:
+    """raw_events (or the replay topic) from `starting_offsets` (Spark's JSON, or
+    earliest), capped per micro-batch like Quix. A checkpoint that already exists
+    ignores it and resumes."""
     return (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", config.KAFKA_BOOTSTRAP_SERVERS)
-        .option("subscribe", config.RAW_EVENTS_TOPIC)
+        .option("subscribe", topic)
         .option("startingOffsets", starting_offsets)
         .option("maxOffsetsPerTrigger", config.SPARK_MAX_OFFSETS_PER_TRIGGER)
         # Offsets expired from Redpanda (24 h) while the job was down: carry on from the
@@ -152,11 +162,21 @@ def before_end(end: cal.Offsets) -> Column:
     return condition
 
 
-def day_checkpoint(day: EngineDay | None) -> str:
-    """One checkpoint per benchmark day; the single historical one without a day."""
+def day_checkpoint(day: EngineDay | BenchRun | None) -> str:
+    """One checkpoint per benchmark day, or per controlled-test run; the single
+    historical one without either."""
     if day is None:
         return config.SPARK_CHECKPOINT_DIR
+    if isinstance(day, BenchRun):
+        return str(Path(config.SPARK_BENCH_CHECKPOINTS_DIR) / str(day.run_id))
     return str(Path(config.SPARK_DAY_CHECKPOINTS_DIR) / day.day.isoformat())
+
+
+def reset_checkpoint(path: str) -> None:
+    """Delete a run's checkpoint before its first launch: the run starts from the
+    replay topic's start, whatever an earlier attempt left there."""
+    if os.path.isdir(path):
+        shutil.rmtree(path)
 
 
 def prune_day_checkpoints(
@@ -172,12 +192,14 @@ def prune_day_checkpoints(
     return removed
 
 
-def committed_position(progress_json: str) -> cal.Offsets | None:
+def committed_position(
+    progress_json: str, topic: str = config.RAW_EVENTS_TOPIC
+) -> cal.Offsets | None:
     """End offsets of the last completed batch, from the progress's compact JSON. Not
     from the progress object: PySpark 4 turns the offsets into str(dict), not JSON."""
     sources = json.loads(progress_json).get("sources") or []
     end = sources[0].get("endOffset") if sources else None
-    return cal.offsets_from_json(end) if end else None
+    return cal.offsets_from_json(end, topic) if end else None
 
 
 class BronzeBatchWriter:
@@ -186,7 +208,7 @@ class BronzeBatchWriter:
     def __init__(
         self,
         checkpoint: str,
-        day: EngineDay | None,
+        day: EngineDay | BenchRun | None,
         identifier: str = BRONZE_IDENTIFIER,
     ) -> None:
         self.checkpoint = checkpoint
@@ -247,26 +269,32 @@ class BronzeBatchWriter:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    day = EngineDay.from_env()
+    bench = BenchRun.from_env()
+    day = bench or EngineDay.from_env()
     starting = "earliest"
-    if day is not None:
+    checkpoint = day_checkpoint(day)
+    if bench is not None:
+        # The replay topic is recreated for each run: read it from its start, with a
+        # fresh checkpoint on the run's first launch
+        bench.prepare(lambda _offsets: reset_checkpoint(checkpoint))
+    elif day is not None:
         # A new day's checkpoint starts from startingOffsets: nothing else to move
         day.prepare(lambda _offsets: None)
         starting = cal.offsets_to_json(day.start)
         removed = prune_day_checkpoints()
         if removed:
             logger.info(f"Old day checkpoints removed: {removed}")
-    checkpoint = day_checkpoint(day)
+    topic = config.BENCH_TOPIC if bench else config.RAW_EVENTS_TOPIC
+    namespace = BENCH_BRONZE_NAMESPACE if bench else config.ICEBERG_BRONZE_NAMESPACE
+    identifier = BENCH_BRONZE_IDENTIFIER if bench else BRONZE_IDENTIFIER
     spark = build_session("bluesky-bronze")
     spark.sparkContext.setLogLevel("WARN")
-    spark.sql(
-        f"CREATE NAMESPACE IF NOT EXISTS {config.SPARK_CATALOG}.{config.ICEBERG_BRONZE_NAMESPACE}"
-    )
-    spark.sql(bronze_ddl())
+    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {config.SPARK_CATALOG}.{namespace}")
+    spark.sql(bronze_ddl(identifier))
 
-    writer = BronzeBatchWriter(checkpoint, day)
+    writer = BronzeBatchWriter(checkpoint, day, identifier)
     query = (
-        read_raw_events(spark, starting)
+        read_raw_events(spark, starting, topic)
         .writeStream.foreachBatch(writer)
         .trigger(processingTime=config.SPARK_TRIGGER_INTERVAL)
         .option("checkpointLocation", checkpoint)
@@ -308,7 +336,7 @@ def main() -> None:
         progress = query.lastProgress
         if day is not None and not day.done and progress:
             raw = progress.json() if callable(progress.json) else progress.json
-            position = committed_position(raw)
+            position = committed_position(raw, topic)
             if position is not None:
                 day.check_complete(position)
     if query.exception():

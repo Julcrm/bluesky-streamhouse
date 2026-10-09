@@ -4,7 +4,7 @@
 bluesky_duckdb:
   target: default
   outputs:
-    default:
+    default: &duckdb_default
       type: duckdb
       # A file, not :memory: - dbt stages each incremental batch in a temp table, which only
       # spills to temp_directory when the DuckDB database is file-backed (a 300k-post batch
@@ -65,3 +65,21 @@ bluesky_duckdb:
             meta_secret: ducklake_catalog
             metadata_schema: transform
             data_path: "s3://{{ env_var('BUCKET', 'bluesky-streamhouse') }}/ducklake/transform/"
+    # Controlled test (decision D36): the same DuckDB with the bench catalogs attached
+    # under the same aliases (own metadata schemas and data paths, src/config.py), so the
+    # SQL is unchanged and the production catalogs' snapshots are never touched
+    bench:
+      <<: *duckdb_default
+      attach:
+        - path: "ducklake:postgres:"
+          alias: bronze
+          read_only: true
+          options:
+            meta_secret: ducklake_catalog
+            metadata_schema: bench_bronze
+        - path: "ducklake:postgres:"
+          alias: transform
+          options:
+            meta_secret: ducklake_catalog
+            metadata_schema: bench_transform
+            data_path: "s3://{{ env_var('BUCKET', 'bluesky-streamhouse') }}/bench/ducklake/transform/"
