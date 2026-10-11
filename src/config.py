@@ -259,6 +259,65 @@ BENCH_SAMPLE_MINUTES = 20
 # One run only, at this date (Europe/Paris): 21:00, after the DuckDB day's close and its
 # last Silver/Gold runs, when nothing is measured; skipped once the sample topic exists
 BENCH_SAMPLE_CRON = "0 21 9 10 *"
+# --- One-off runs (src/dagster/one_off.py, decision of Julien on 2026-10-11) ---
+# A test or a catch-up launched once at a set time (Europe/Paris offset), so nothing
+# waits for someone to be available. Key = run key (launched once); remove an entry once
+# it has served. Launched only within the grace period after its time, never later
+ONE_OFF_GRACE_HOURS = 12
+ONE_OFF_SENSOR_SECONDS = 60
+# Windows of the first Spark day (08/10), never built (Thrift OOM, D34 revised): only on
+# a Spark day (Thrift JVM up), after that day's own windows, and before the Iceberg
+# maintenance of 15/10 02:30 drops its catch-up (7-day retention on event_time).
+# Wednesday is a fallback, harmless if Monday worked (the windows are rebuilt)
+_SPARK_WINDOWS_0810 = {
+    "ops": {
+        "bluesky__spark__alternation__iceberg_day_completeness": {"config": {"day": "2026-10-08"}},
+        "bluesky__spark__benchmark__spark_benchmark_windows": {"config": {"day": "2026-10-08"}},
+    }
+}
+ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
+    (
+        "spark-windows-2026-10-08-mon",
+        "bluesky_iceberg_day_completeness",
+        "2026-10-12T19:20:00+02:00",
+        _SPARK_WINDOWS_0810,
+    ),
+    (
+        "spark-windows-2026-10-08-wed",
+        "bluesky_iceberg_day_completeness",
+        "2026-10-14T19:20:00+02:00",
+        _SPARK_WINDOWS_0810,
+    ),
+)
+# Windows of the DuckDB days 09/10 and 11/10, failed at their close (.tmp, then out of
+# memory): after the last Silver/Gold run of 11/10 (20:00), one at a time (1 GB each)
+_DUCKDB_COMPLETENESS = "bluesky_ducklake_day_completeness"
+
+
+def _duckdb_windows(day: str) -> dict:
+    return {
+        "ops": {
+            "bluesky__duckdb__alternation__ducklake_day_completeness": {"config": {"day": day}},
+            "bluesky__duckdb__benchmark__duckdb_benchmark_windows": {"config": {"day": day}},
+        }
+    }
+
+
+ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
+    (
+        "duckdb-windows-2026-10-11",
+        _DUCKDB_COMPLETENESS,
+        "2026-10-11T20:05:00+02:00",
+        _duckdb_windows("2026-10-11"),
+    ),
+    (
+        "duckdb-windows-2026-10-09",
+        _DUCKDB_COMPLETENESS,
+        "2026-10-11T20:20:00+02:00",
+        _duckdb_windows("2026-10-09"),
+    ),
+)
+
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
