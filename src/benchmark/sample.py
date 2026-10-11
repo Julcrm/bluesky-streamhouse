@@ -19,6 +19,7 @@ from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, Topi
 from confluent_kafka.admin import AdminClient, NewTopic
 
 from src import config
+from src.processing.bronze import parse_bronze_event
 from src.resources import redpanda
 
 POLL_TIMEOUT_SECONDS = 5.0
@@ -52,14 +53,15 @@ def sample_bounds(start: datetime, minutes: int, topic: str) -> SampleBounds:
 
 
 def collection_of(value: bytes | None) -> str:
-    """`collection/operation` of a Jetstream commit message, `other` otherwise."""
+    """`collection/operation` of a message Bronze would store, `other` otherwise: parsed
+    by the Bronze parser itself, so the mix matches what both branches ingest."""
     try:
-        commit = json.loads(value or b"{}").get("commit") or {}
+        event = parse_bronze_event(json.loads(value or b"{}"))
     except ValueError:
         return "other"
-    if not commit.get("collection"):
+    if event is None:
         return "other"
-    return f"{commit['collection']}/{commit.get('operation', '?')}"
+    return f"{event.collection}/{event.operation}"
 
 
 def _admin() -> AdminClient:
