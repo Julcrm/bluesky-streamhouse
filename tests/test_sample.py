@@ -13,14 +13,28 @@ from src.benchmark import sample
 
 
 def _commit(collection: str, operation: str = "create") -> bytes:
-    return json.dumps(
-        {"kind": "commit", "commit": {"collection": collection, "operation": operation}}
-    ).encode()
+    """A Jetstream v2 commit message, as the producer writes it to `raw_events`."""
+    payload = {
+        "$type": "network.bsky.jetstream.subscribeEvents#commit",
+        "collection": collection,
+        "did": "did:plc:s75bk",
+        "operation": operation,
+        "rkey": "3mwevbcl4so27",
+        "seq": 26330886591,
+        "time": "2026-09-25T23:09:22.458527Z",
+    }
+    return json.dumps({"$type": "message", "payload": payload}).encode()
 
 
 def test_collection_of_commit_and_others() -> None:
     assert sample.collection_of(_commit("app.bsky.feed.like")) == "app.bsky.feed.like/create"
-    assert sample.collection_of(b'{"kind": "identity"}') == "other"
+    assert sample.collection_of(_commit("app.bsky.feed.post", "delete")) == (
+        "app.bsky.feed.post/delete"
+    )
+    # The old Jetstream v1 shape is not what the producer writes
+    old = {"kind": "commit", "commit": {"collection": "app.bsky.feed.like"}}
+    assert sample.collection_of(json.dumps(old).encode()) == "other"
+    assert sample.collection_of(b'{"$type": "identity"}') == "other"
     assert sample.collection_of(b"not json") == "other"
     assert sample.collection_of(None) == "other"
 

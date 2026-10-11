@@ -16,7 +16,7 @@ import duckdb
 import s3fs
 
 from src import config
-from src.resources.ducklake import DuckLakeSettings, connect
+from src.resources.ducklake import DuckLakeSettings, code_server_connect
 
 TIME_COLUMNS = config.RETENTION_TIME_COLUMNS
 PROGRESS_TABLE = "meta.silver_progress"
@@ -37,11 +37,7 @@ class CatalogStats:
 
 def maintenance_connection(settings: DuckLakeSettings) -> duckdb.DuckDBPyConnection:
     """Writable connection to one catalog, with the code server's DuckDB budget."""
-    conn = connect(settings)
-    conn.execute(f"SET memory_limit = '{config.MAINTENANCE_DUCKDB_MEMORY_LIMIT}'")
-    conn.execute(f"SET threads = {int(config.MAINTENANCE_DUCKDB_THREADS)}")
-    conn.execute(f"SET temp_directory = '{config.MAINTENANCE_DUCKDB_TEMP_DIRECTORY}'")
-    return conn
+    return code_server_connect(settings)
 
 
 def retention_cutoff(days: int, now: datetime | None = None) -> datetime:
