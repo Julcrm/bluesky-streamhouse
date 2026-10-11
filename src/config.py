@@ -177,8 +177,9 @@ BUCKET_ALERT_BYTES = 90 * 10**9
 CATALOG_ALERT_BYTES = 2 * 10**9
 # Dagster runs of this code location only: the instance is shared with velib (D20)
 DAGSTER_RUN_RETENTION_DAYS = 30
-# dagster-dbt's per-run target folders (~3 MB each), deleted by the housekeeping
-DBT_TARGET_RETENTION_DAYS = 2
+# dagster-dbt's per-run target folders (~3 MB each), deleted by the housekeeping; 5 days
+# keep a Spark day's dbt logs (per-model timings) until the session after next
+DBT_TARGET_RETENTION_DAYS = 5
 
 # --- Nightly checks (decision D25) ---
 # Every 15 min, dbt tests check the last 2 hours written (dbt var test_window); every
