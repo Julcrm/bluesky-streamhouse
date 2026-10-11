@@ -6,7 +6,7 @@ Runs execute in this container (DefaultRunLauncher), so dbt and DuckDB memory co
 against its own limit: the cost of the DuckDB branch's transformations stays attributable.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from dagster import (
     DefaultScheduleStatus,
@@ -33,6 +33,7 @@ from src.dagster.alternation import (
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
+from src.dagster.one_off import OneOffRun, one_off_sensor
 from src.dagster.runs import active_location_runs, blocks_schedule
 from src.dagster.sample import benchmark_sample, sample_job, sample_schedule
 from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
@@ -167,6 +168,16 @@ defs = Definitions(
         close_day_schedule,
         sample_schedule,
     ],
-    sensors=[failure_alert_sensor, calendar_alert_sensor],
+    sensors=[
+        failure_alert_sensor,
+        calendar_alert_sensor,
+        one_off_sensor(
+            "duckdb_one_off_sensor",
+            [completeness_job, maintenance_job, nightly_checks_job],
+            [OneOffRun(*run) for run in config.ONE_OFF_RUNS_DUCKDB],
+            timedelta(hours=config.ONE_OFF_GRACE_HOURS),
+            config.ONE_OFF_SENSOR_SECONDS,
+        ),
+    ],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )
