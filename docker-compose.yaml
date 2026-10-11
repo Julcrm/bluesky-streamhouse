@@ -193,11 +193,14 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M  # ~30 MiB measured
-        # Protected from reclaim by the neighbours (memory.low, D31): the working set
-        # measured on 2026-10-08, so other projects' memory goes first under pressure
+          # 256M was ~30 MiB measured idle, but a Spark day (2026-10-10) peaked at ~450 MiB
+          # (anon 231 + swap 219): every 5 s streaming commit and every Silver/Gold query
+          # plan goes through the catalog, which stalled on memory (PSI full 6.7 s / 5 min)
+          memory: 768M
+        # Protected from reclaim by the neighbours (memory.low, D31): the working set of a
+        # Spark day, so other projects' memory goes first under pressure
         reservations:
-          memory: 128M
+          memory: 512M
     networks:
       - coolify
     restart: always
