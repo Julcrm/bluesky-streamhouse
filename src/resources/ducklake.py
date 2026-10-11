@@ -123,10 +123,14 @@ def connect(
 def code_server_connect(
     settings: DuckLakeSettings | None = None, read_only: bool = False
 ) -> duckdb.DuckDBPyConnection:
-    """`connect()` with the code server's DuckDB budget: memory, threads and a writable
-    spill directory (the default `.tmp` lands in the read-only working directory)."""
+    """`connect()` with the code server's DuckDB budget: memory, threads, a writable spill
+    directory (the default `.tmp` lands in the read-only working directory), and no
+    insertion order to keep, so large aggregates spill instead of failing."""
     conn = connect(settings, read_only=read_only)
     conn.execute(f"SET memory_limit = '{config.CODE_SERVER_DUCKDB_MEMORY_LIMIT}'")
     conn.execute(f"SET threads = {int(config.CODE_SERVER_DUCKDB_THREADS)}")
     conn.execute(f"SET temp_directory = '{config.CODE_SERVER_DUCKDB_TEMP_DIRECTORY}'")
+    # Nothing here relies on row order; with it, the benchmark windows' aggregates over a
+    # day of Bronze (~30 M rows) ran out of the 1 GB instead of spilling (2026-10-11)
+    conn.execute("SET preserve_insertion_order = false")
     return conn
