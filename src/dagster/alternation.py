@@ -40,7 +40,7 @@ from src.dagster.completeness import (
     completeness_result,
 )
 from src.processing.bronze import BRONZE_TABLE
-from src.resources.ducklake import connect
+from src.resources.ducklake import code_server_connect, connect
 
 GROUP = "alternation"
 OPEN, CLOSE, FORCE = "open", "close", "force"
@@ -181,7 +181,7 @@ def duckdb_benchmark_windows(
     """Rebuilds the day's windows (idempotent); Bronze is read once, at night."""
     day = closed_day(config.day)
     table = f"{settings.DUCKLAKE_BRONZE_ALIAS}.main.{BRONZE_TABLE}"
-    lake = connect(read_only=True)
+    lake = code_server_connect(read_only=True)
     try:
         rows = lake.execute(windows.messages_query_duckdb(table, day)).fetchall()
     finally:

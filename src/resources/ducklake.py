@@ -118,3 +118,15 @@ def connect(
         conn.close()
         raise
     return conn
+
+
+def code_server_connect(
+    settings: DuckLakeSettings | None = None, read_only: bool = False
+) -> duckdb.DuckDBPyConnection:
+    """`connect()` with the code server's DuckDB budget: memory, threads and a writable
+    spill directory (the default `.tmp` lands in the read-only working directory)."""
+    conn = connect(settings, read_only=read_only)
+    conn.execute(f"SET memory_limit = '{config.CODE_SERVER_DUCKDB_MEMORY_LIMIT}'")
+    conn.execute(f"SET threads = {int(config.CODE_SERVER_DUCKDB_THREADS)}")
+    conn.execute(f"SET temp_directory = '{config.CODE_SERVER_DUCKDB_TEMP_DIRECTORY}'")
+    return conn

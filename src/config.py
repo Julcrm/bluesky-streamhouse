@@ -159,10 +159,11 @@ QUIX_LOCKED_RETRY_SECONDS = 30.0
 # A DELETE or CHECKPOINT losing a commit race anyway (another writer) is retried
 COMMIT_CONFLICT_RETRIES = 3
 COMMIT_CONFLICT_RETRY_DELAY_SECONDS = 30
-# Same budget as the dbt profile, inside the 1.5 GB code server
-MAINTENANCE_DUCKDB_MEMORY_LIMIT = "1GB"
-MAINTENANCE_DUCKDB_THREADS = 2
-MAINTENANCE_DUCKDB_TEMP_DIRECTORY = "/tmp/duckdb_maintenance"
+# DuckDB budget of the code server's own connections (maintenance, benchmark windows):
+# same as the dbt profile; spills go to /tmp, the working directory /app is read-only
+CODE_SERVER_DUCKDB_MEMORY_LIMIT = "1GB"
+CODE_SERVER_DUCKDB_THREADS = 2
+CODE_SERVER_DUCKDB_TEMP_DIRECTORY = "/tmp/duckdb_code_server"
 # A Silver/Gold run in progress at 02:00 is waited for, up to this long
 MAINTENANCE_WAIT_FOR_RUN_SECONDS = 30 * 60
 # Guard (D16, D21): pending snapshots older than the time travel window would be
