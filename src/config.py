@@ -303,31 +303,7 @@ ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
     # of 18/10, ahead of the scheduled Tuesday night, which becomes a second measure
     ("bench-spark-night-2026-10-18", "bluesky_spark_bench_night", "2026-10-18T20:00:00+02:00", {}),
 )
-# Windows of the DuckDB days never built (out of memory at every close until the windows
-# were computed by chunks, 15/10): after the last Silver/Gold run of 15/10 (20:00), one at a
-# time (1 GB each), before the DuckLake retention cuts a day (02:00, UTC midnight - 7 days:
-# 09/10 is cut on 16/10, 11/10 on 18/10, 13/10 on 20/10). 15/10 is built at its own close
-_DUCKDB_COMPLETENESS = "bluesky_ducklake_day_completeness"
-
-
-def _duckdb_windows(day: str) -> dict:
-    return {
-        "ops": {
-            "bluesky__duckdb__alternation__ducklake_day_completeness": {"config": {"day": day}},
-            "bluesky__duckdb__benchmark__duckdb_benchmark_windows": {"config": {"day": day}},
-        }
-    }
-
-
 ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
-    *(
-        (f"duckdb-windows-{day}-chunked", _DUCKDB_COMPLETENESS, at, _duckdb_windows(day))
-        for day, at in (
-            ("2026-10-09", "2026-10-15T20:20:00+02:00"),
-            ("2026-10-11", "2026-10-15T20:35:00+02:00"),
-            ("2026-10-13", "2026-10-15T20:50:00+02:00"),
-        )
-    ),
     # First controlled-test night in prod (plan A of Julien, 15/10): after the DuckDB day
     # of 17/10, ahead of the scheduled Monday night, which becomes a second measure
     (
