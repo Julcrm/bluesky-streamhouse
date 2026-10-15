@@ -8,8 +8,12 @@ only the bench catalogs (DuckDB) and the `bench_` namespaces (Spark) are named h
   `bench/` in the bucket. The next ATTACH (Quix, dbt) recreates them empty. Dropping
   tables one by one would leave the catalog's snapshots behind, a different start state
   for each repetition.
-- Spark branch: every table of the bench namespaces is dropped with PURGE (its data
-  and metadata files), through the Thrift server.
+- Spark branch: every table of the bench namespaces is dropped through the Thrift
+  server, and Lakekeeper deletes its data and metadata files itself: the warehouse's
+  delete profile is `hard` (local and prod, checked on 2026-10-15). Never with PURGE:
+  Spark then drops the table first and deletes its files from the client, but Lakekeeper
+  no longer signs S3 requests for a dropped table, so the statement fails after the
+  drop (found by the local dry run of 2026-10-15).
 
 Kept free of Dagster imports.
 """
@@ -77,7 +81,8 @@ def drop_ducklake_bench(
 
 
 def drop_iceberg_bench(namespaces: tuple[str, ...] = ICEBERG_BENCH_NAMESPACES) -> list[str]:
-    """Drop, with PURGE, every table of the bench namespaces; the tables dropped."""
+    """Drop every table of the bench namespaces (files deleted by Lakekeeper); the
+    tables dropped."""
     from src.resources import thrift
 
     _bench_only(namespaces)
@@ -87,6 +92,6 @@ def drop_iceberg_bench(namespaces: tuple[str, ...] = ICEBERG_BENCH_NAMESPACES) -
             continue
         for row in thrift.records(f"SHOW TABLES IN {config.SPARK_CATALOG}.{namespace}"):
             table = f"{config.SPARK_CATALOG}.{namespace}.{row['tableName']}"
-            thrift.query(f"DROP TABLE IF EXISTS {table} PURGE")
+            thrift.query(f"DROP TABLE IF EXISTS {table}")
             dropped.append(table)
     return dropped

@@ -241,6 +241,26 @@ def test_cleanup_refuses_anything_but_bench_objects() -> None:
         cleanup.drop_iceberg_bench(namespaces=("silver",))
 
 
+def test_drop_iceberg_bench_never_purges_from_spark(monkeypatch) -> None:
+    """PURGE fails after the drop (Lakekeeper no longer signs for the dropped table, dry
+    run of 2026-10-15); a plain DROP lets Lakekeeper's hard delete profile delete the files."""
+    from src.benchmark import cleanup
+    from src.resources import thrift
+
+    statements = []
+
+    def records(sql):
+        if sql.startswith("SHOW NAMESPACES"):
+            return [{"namespace": "bench_silver"}] if "bench_silver" in sql else []
+        return [{"tableName": "silver_posts"}]
+
+    monkeypatch.setattr(thrift, "records", records)
+    monkeypatch.setattr(thrift, "query", statements.append)
+    dropped = cleanup.drop_iceberg_bench()
+    assert dropped == [f"{config.SPARK_CATALOG}.bench_silver.silver_posts"]
+    assert statements == [f"DROP TABLE IF EXISTS {config.SPARK_CATALOG}.bench_silver.silver_posts"]
+
+
 def test_drop_ducklake_bench_leaves_production_untouched() -> None:
     """On the local stack: the bench catalog is gone and recreated empty; production
     keeps its tables."""
