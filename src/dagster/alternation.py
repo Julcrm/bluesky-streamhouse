@@ -183,7 +183,7 @@ def duckdb_benchmark_windows(
     table = f"{settings.DUCKLAKE_BRONZE_ALIAS}.main.{BRONZE_TABLE}"
     lake = code_server_connect(read_only=True)
     try:
-        rows = lake.execute(windows.messages_query_duckdb(table, day)).fetchall()
+        rows = windows.messages_rows_duckdb(lake, table, day)
     finally:
         lake.close()
     conn = cal.connect_benchmark()
