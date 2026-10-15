@@ -153,6 +153,41 @@ def test_histogram_percentiles_equal_quantile_cont() -> None:
             assert window.collections[collection] == messages
 
 
+def test_chunked_rows_equal_the_single_query(monkeypatch) -> None:
+    """Splitting by ranges of offsets and by hour (the code server's 1 GB) changes
+    nothing: same windows, collections and percentiles, duplicates counted once."""
+    conn = duckdb.connect()
+    conn.execute(
+        "CREATE TABLE bronze AS SELECT (i % 2)::INT AS kafka_partition, (i // 2)::BIGINT "
+        "AS kafka_offset, CASE WHEN i % 3 = 0 THEN 'post' ELSE 'like' END AS collection, "
+        "TIMESTAMPTZ '2026-10-08 12:00:00+00' + INTERVAL (i * 20) SECOND AS event_time, "
+        "TIMESTAMPTZ '2026-10-08 12:00:00+00' + INTERVAL (i * 20) SECOND "
+        "+ INTERVAL ((hash(i) % 900000)::INT) MILLISECOND AS processed_at "
+        "FROM range(1200) t(i)"
+    )
+    conn.execute(
+        "INSERT INTO bronze SELECT * REPLACE (processed_at + INTERVAL 1 HOUR AS processed_at) "
+        "FROM bronze WHERE kafka_offset % 50 = 0"
+    )
+    day = _day(start_offsets={0: 0, 1: 0}, end_offsets={0: 600, 1: 600})
+    single = conn.execute(w.messages_query_duckdb("bronze", day)).fetchall()
+    monkeypatch.setattr(w, "OFFSET_CHUNK", 70)  # several ranges per partition
+    hourly = w.messages_rows_duckdb(conn, "bronze", day)
+    assert len({row[0] // 3600 for row in hourly}) >= 6
+    key = lambda row: (row[0], row[1] or "")  # noqa: E731
+    assert sorted(hourly, key=key) == sorted(single, key=key)
+    assert conn.execute("SELECT count(*) FROM duckdb_tables() WHERE temporary").fetchone() == (0,)
+
+
+def test_offset_chunks_cover_the_day_once() -> None:
+    day = _day(start_offsets={0: 10, 1: 0}, end_offsets={0: 25, 1: 5})
+    assert w.offset_chunks(day, 10) == [
+        "(kafka_partition = 0 AND kafka_offset >= 10 AND kafka_offset < 20)",
+        "(kafka_partition = 0 AND kafka_offset >= 20 AND kafka_offset < 25)",
+        "(kafka_partition = 1 AND kafka_offset >= 0 AND kafka_offset < 5)",
+    ]
+
+
 def test_ratio_view_only_uses_clean_windows() -> None:
     view = w.DDL[-1]
     assert "NOT b.host_contaminated AND NOT s.restarted" in view
