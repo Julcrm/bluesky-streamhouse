@@ -3,7 +3,7 @@
 import pytest
 
 from src import config
-from src.processing.spark.thrift_server import THRIFT_SERVER_CLASS, command
+from src.processing.spark.thrift_server import LOG4J_CONFIG, THRIFT_SERVER_CLASS, command
 
 JARS = ["/opt/spark-jars/iceberg.jar", "/opt/spark-jars/aws.jar"]
 
@@ -33,6 +33,14 @@ def test_sessions_get_the_dbt_settings() -> None:
     assert conf["spark.sql.session.timeZone"] == "UTC"
     assert "-Dderby.system.home=/tmp/derby" in conf["spark.driver.extraJavaOptions"]
     assert f"hive.server2.thrift.port={config.SPARK_THRIFT_PORT}" in args
+
+
+def test_logs_at_warn_from_a_bundled_config() -> None:
+    """INFO logs rotated the JVM crash traces out of the Docker logs (12-14/10)."""
+    conf = _conf(command(JARS))
+    assert f"-Dlog4j2.configurationFile={LOG4J_CONFIG}" in conf["spark.driver.extraJavaOptions"]
+    with open(LOG4J_CONFIG) as f:
+        assert "rootLogger.level = warn" in f.read()
 
 
 def test_refuses_to_start_without_jars() -> None:

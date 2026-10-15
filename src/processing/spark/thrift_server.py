@@ -19,6 +19,8 @@ from src import config
 from src.resources.spark import catalog_conf, image_jars
 
 THRIFT_SERVER_CLASS = "org.apache.spark.sql.hive.thriftserver.HiveThriftServer2"
+# WARN logging: Spark's INFO defaults rotated the crash traces out of the Docker logs
+LOG4J_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log4j2-thrift.properties")
 
 
 def server_conf() -> dict[str, str]:
@@ -27,7 +29,14 @@ def server_conf() -> dict[str, str]:
         "spark.driver.extraJavaOptions": " ".join(
             # Hive's embedded Derby metastore (unused: Iceberg tables live in Lakekeeper)
             # writes its files in the working directory, read-only for appuser
-            filter(None, [config.SPARK_DRIVER_JAVA_OPTIONS, "-Dderby.system.home=/tmp/derby"])
+            filter(
+                None,
+                [
+                    config.SPARK_DRIVER_JAVA_OPTIONS,
+                    "-Dderby.system.home=/tmp/derby",
+                    f"-Dlog4j2.configurationFile={LOG4J_CONFIG}",
+                ],
+            )
         ),
         "spark.sql.warehouse.dir": "/tmp/spark-warehouse",
         # Timestamps are UTC end to end, like the DuckDB branch's DuckDB sessions

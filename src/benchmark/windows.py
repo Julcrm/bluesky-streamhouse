@@ -220,21 +220,26 @@ def _day_offsets(day: cal.CalendarDay) -> str:
     )
 
 
-def _percentiles_from(latencies: str) -> str:
-    """Rest of the query over `latencies` (window_epoch, collection, latency_ms): rows of
-    window start, collection (NULL for the total), messages, p50, p95. Valid in DuckDB
-    and Spark SQL."""
+def _histogram_of(latencies: str) -> str:
+    """Messages by (window, collection, latency) over `latencies` (window_epoch,
+    collection, latency_ms). Valid in DuckDB and Spark SQL."""
     return f"""
-        by_collection AS (
             SELECT window_epoch, collection, latency_ms, count(*) AS n
             FROM {latencies}
             GROUP BY window_epoch, collection, latency_ms
-        ),
+    """
+
+
+def _percentiles_of(by_collection: str) -> str:
+    """Rest of the query over a histogram `by_collection` (window_epoch, collection,
+    latency_ms, n): rows of window start, collection (NULL for the total), messages, p50,
+    p95. Valid in DuckDB and Spark SQL."""
+    return f"""
         histogram AS (
-            SELECT window_epoch, collection, latency_ms, n FROM by_collection
+            SELECT window_epoch, collection, latency_ms, n FROM {by_collection}
             UNION ALL
             SELECT window_epoch, NULL AS collection, latency_ms, sum(n) AS n
-            FROM by_collection
+            FROM {by_collection}
             GROUP BY window_epoch, latency_ms
         ),
         running AS (
@@ -266,13 +271,19 @@ def _percentiles_from(latencies: str) -> str:
     """
 
 
-def messages_query_duckdb(table: str, day: cal.CalendarDay) -> str:
-    """Rows: window start (epoch s), collection, messages, p50 and p95 latency (ms)."""
+def _percentiles_from(latencies: str) -> str:
+    """Rest of the query over `latencies`: the histogram, then its percentiles."""
+    return f"by_collection AS ({_histogram_of(latencies)}), {_percentiles_of('by_collection')}"
+
+
+def _latencies_duckdb(table: str, offsets: str) -> str:
+    """CTEs `first_copy` and `latencies` of the Bronze rows matching `offsets` (one row
+    per distinct offset)."""
     return f"""
         WITH first_copy AS (
             SELECT kafka_partition, kafka_offset, min(processed_at) AS processed_at,
                    min(event_time) AS event_time, any_value(collection) AS collection
-            FROM {table} WHERE {_day_offsets(day)}
+            FROM {table} WHERE {offsets}
             GROUP BY kafka_partition, kafka_offset
         ),
         latencies AS (
@@ -280,9 +291,68 @@ def messages_query_duckdb(table: str, day: cal.CalendarDay) -> str:
                        * {int(WINDOW.total_seconds())} AS window_epoch,
                    collection, epoch_ms(processed_at) - epoch_ms(event_time) AS latency_ms
             FROM first_copy
-        ),
-        {_percentiles_from("latencies")}
+        )
     """
+
+
+def messages_query_duckdb(table: str, day: cal.CalendarDay) -> str:
+    """Rows: window start (epoch s), collection, messages, p50 and p95 latency (ms)."""
+    return f"{_latencies_duckdb(table, _day_offsets(day))}, {_percentiles_from('latencies')}"
+
+
+# A day in one query (~37 M offsets, ~11 M histogram rows: catch-up latencies spread over
+# 12 h, one row per millisecond value) sits at the edge of the code server's 1 GB: the
+# first-copy aggregate and the percentile window functions do not spill enough, three
+# closes failed (11/10, 13/10) while a standalone run passed in 159 s. Split twice, exact:
+# the first copy by ranges of offsets (the copies of a message share its offset, and
+# histograms add up), the percentiles by hour (a window lies within one hour)
+OFFSET_CHUNK = 2_000_000
+PERCENTILE_CHUNK_SECONDS = 3600
+
+
+def offset_chunks(day: cal.CalendarDay, size: int = OFFSET_CHUNK) -> list[str]:
+    """The day's offsets as conditions on ranges of at most `size` offsets."""
+    if day.end_offsets is None:
+        raise cal.CalendarError(f"Day {day.day} has no end offsets yet")
+    chunks = []
+    for p, end in sorted(day.end_offsets.items()):
+        for lo in range(int(day.start_offsets.get(p, end)), int(end), size):
+            hi = min(lo + size, int(end))
+            chunks.append(
+                f"(kafka_partition = {int(p)} AND kafka_offset >= {lo} AND kafka_offset < {hi})"
+            )
+    return chunks
+
+
+def messages_rows_duckdb(conn, table: str, day: cal.CalendarDay) -> list[tuple]:
+    """Rows of messages_query_duckdb, computed by ranges of offsets then hour by hour."""
+    assert PERCENTILE_CHUNK_SECONDS % int(WINDOW.total_seconds()) == 0
+    conn.execute(
+        "CREATE OR REPLACE TEMP TABLE latency_histogram "
+        "(window_epoch BIGINT, collection VARCHAR, latency_ms BIGINT, n BIGINT)"
+    )
+    try:
+        for offsets in offset_chunks(day, OFFSET_CHUNK):
+            conn.execute(
+                "INSERT INTO latency_histogram "
+                f"{_latencies_duckdb(table, offsets)} {_histogram_of('latencies')}"
+            )
+        hours = conn.execute(
+            f"SELECT DISTINCT window_epoch // {PERCENTILE_CHUNK_SECONDS} "
+            f"* {PERCENTILE_CHUNK_SECONDS} FROM latency_histogram ORDER BY 1"
+        ).fetchall()
+        rows: list[tuple] = []
+        for (start,) in hours:
+            # A latency of a window may come from several ranges: summed here
+            rows += conn.execute(
+                "WITH hour AS (SELECT window_epoch, collection, latency_ms, sum(n) AS n "
+                f"FROM latency_histogram WHERE window_epoch >= {int(start)} "
+                f"AND window_epoch < {int(start) + PERCENTILE_CHUNK_SECONDS} "
+                f"GROUP BY window_epoch, collection, latency_ms), {_percentiles_of('hour')}"
+            ).fetchall()
+    finally:
+        conn.execute("DROP TABLE IF EXISTS latency_histogram")
+    return rows
 
 
 def messages_query_spark(table: str, day: cal.CalendarDay) -> str:

@@ -265,32 +265,34 @@ BENCH_SAMPLE_CRON = "0 21 9 10 *"
 # it has served. Launched only within the grace period after its time, never later
 ONE_OFF_GRACE_HOURS = 12
 ONE_OFF_SENSOR_SECONDS = 60
-# Windows of the first Spark day (08/10), never built (Thrift OOM, D34 revised): only on
-# a Spark day (Thrift JVM up), after that day's own windows, and before the Iceberg
-# maintenance of 15/10 02:30 drops its catch-up (7-day retention on event_time).
-# Wednesday is a fallback, harmless if Monday worked (the windows are rebuilt)
-_SPARK_WINDOWS_0810 = {
+# Windows of the Spark day 12/10, not built at its close (Thrift down at 19:01): only on
+# a Spark day (Thrift JVM up), after that day's own windows (19:00), and before the
+# Iceberg maintenance of 19/10 02:30 cuts that day (7-day retention on event_time; the
+# day starts at 11/10 19:00). Sunday is a fallback, harmless if Friday worked (rebuilt)
+_SPARK_WINDOWS_1210 = {
     "ops": {
-        "bluesky__spark__alternation__iceberg_day_completeness": {"config": {"day": "2026-10-08"}},
-        "bluesky__spark__benchmark__spark_benchmark_windows": {"config": {"day": "2026-10-08"}},
+        "bluesky__spark__alternation__iceberg_day_completeness": {"config": {"day": "2026-10-12"}},
+        "bluesky__spark__benchmark__spark_benchmark_windows": {"config": {"day": "2026-10-12"}},
     }
 }
 ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
     (
-        "spark-windows-2026-10-08-mon",
+        "spark-windows-2026-10-12-fri",
         "bluesky_iceberg_day_completeness",
-        "2026-10-12T19:20:00+02:00",
-        _SPARK_WINDOWS_0810,
+        "2026-10-16T19:20:00+02:00",
+        _SPARK_WINDOWS_1210,
     ),
     (
-        "spark-windows-2026-10-08-wed",
+        "spark-windows-2026-10-12-sun",
         "bluesky_iceberg_day_completeness",
-        "2026-10-14T19:20:00+02:00",
-        _SPARK_WINDOWS_0810,
+        "2026-10-18T19:20:00+02:00",
+        _SPARK_WINDOWS_1210,
     ),
 )
-# Windows of the DuckDB days 09/10 and 11/10, failed at their close (.tmp, then out of
-# memory): after the last Silver/Gold run of 11/10 (20:00), one at a time (1 GB each)
+# Windows of the DuckDB days never built (out of memory at every close until the windows
+# were computed by chunks, 15/10): after the last Silver/Gold run of 15/10 (20:00), one at a
+# time (1 GB each), before the DuckLake retention cuts a day (02:00, UTC midnight - 7 days:
+# 09/10 is cut on 16/10, 11/10 on 18/10, 13/10 on 20/10). 15/10 is built at its own close
 _DUCKDB_COMPLETENESS = "bluesky_ducklake_day_completeness"
 
 
@@ -303,19 +305,13 @@ def _duckdb_windows(day: str) -> dict:
     }
 
 
-ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
-    (
-        "duckdb-windows-2026-10-11",
-        _DUCKDB_COMPLETENESS,
-        "2026-10-11T20:05:00+02:00",
-        _duckdb_windows("2026-10-11"),
-    ),
-    (
-        "duckdb-windows-2026-10-09",
-        _DUCKDB_COMPLETENESS,
-        "2026-10-11T20:20:00+02:00",
-        _duckdb_windows("2026-10-09"),
-    ),
+ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = tuple(
+    (f"duckdb-windows-{day}-chunked", _DUCKDB_COMPLETENESS, at, _duckdb_windows(day))
+    for day, at in (
+        ("2026-10-09", "2026-10-15T20:20:00+02:00"),
+        ("2026-10-11", "2026-10-15T20:35:00+02:00"),
+        ("2026-10-13", "2026-10-15T20:50:00+02:00"),
+    )
 )
 
 # The supervisor of each engine container reads the calendar this often
