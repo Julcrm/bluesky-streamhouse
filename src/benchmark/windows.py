@@ -9,7 +9,8 @@ the collector's raw samples (src/benchmark/collector.py) and the branch's own Br
 - branch_windows: per window, the branch's messages (distinct Kafka offsets of the day,
   first copy), end-to-end latency p50/p95 (processed_at − event_time), collection mix,
   regime (catch-up before the day's caught_up_at, live after), rate bucket, and the host's
-  health over the window (CPU steal, PSI), which only flags contaminated windows (D32).
+  health over the window (CPU steal, the neighbours' CPU, available memory, PSI), which
+  only flags contaminated windows (D32).
 
 Ratios (CPU ms per message, MiB·s per 10 000 messages) are not stored: the view
 `benchmark_ratios` computes them, so a formula changes without recomputing anything.
@@ -130,6 +131,7 @@ class HostSample:
     mem_psi_full_us: int | None
     cpu_psi_some_us: int | None
     io_psi_full_us: int | None
+    cpu_usec: int | None = None  # sampled since 2026-10-15
 
 
 @dataclass
@@ -140,6 +142,8 @@ class HostWindow:
     psi_cpu_ms: float = 0.0
     psi_io_ms: float = 0.0
     min_available_mib: float | None = None
+    # CPU time of every process of the host; None once a sample lacks it
+    cpu_ms: float | None = 0.0
 
     @property
     def steal_pct(self) -> float | None:
@@ -158,6 +162,8 @@ def host_windows(samples: list[HostSample]) -> dict[datetime, HostWindow]:
             w.psi_mem_ms += (_delta(a.mem_psi_full_us, b.mem_psi_full_us) or 0.0) * share / 1000
             w.psi_cpu_ms += (_delta(a.cpu_psi_some_us, b.cpu_psi_some_us) or 0.0) * share / 1000
             w.psi_io_ms += (_delta(a.io_psi_full_us, b.io_psi_full_us) or 0.0) * share / 1000
+            cpu = _delta(a.cpu_usec, b.cpu_usec)
+            w.cpu_ms = None if cpu is None or w.cpu_ms is None else w.cpu_ms + cpu * share / 1000
             available = min(a.mem_available_bytes, b.mem_available_bytes) / MIB
             w.min_available_mib = (
                 available if w.min_available_mib is None else min(w.min_available_mib, available)
@@ -165,15 +171,27 @@ def host_windows(samples: list[HostSample]) -> dict[datetime, HostWindow]:
     return dict(windows)
 
 
-def host_contaminated(window: HostWindow | None) -> bool:
-    """A window the neighbours may have biased (thresholds provisional until the freeze)."""
+def neighbour_cpu_cores(window: HostWindow | None, sampled_cpu_ms: float) -> float | None:
+    """Average cores used over the window by everything outside the sampled containers
+    (both branches and the shared services): other projects, Coolify, the host's own
+    processes. None without the host's CPU time (samples before 2026-10-15)."""
+    if window is None or window.cpu_ms is None or window.total_ticks == 0:
+        return None
+    # A container restart drops its pair (service_windows): its CPU lands here, a little
+    # too much for the neighbours in that window, never too little
+    return max(0.0, window.cpu_ms - sampled_cpu_ms) / (config.BENCHMARK_WINDOW_SECONDS * 1000)
+
+
+def host_contaminated(window: HostWindow | None, neighbour_cores: float | None = None) -> bool:
+    """A window the neighbours may have biased (thresholds provisional until the freeze):
+    the hypervisor's other tenants (steal), the VPS's other projects (their CPU, or the
+    memory left). The host's PSI is no flag: it mostly measures the branch itself."""
     if window is None:
         return True  # no host data: cannot be vouched for
     steal = window.steal_pct or 0.0
-    stalled_ms = window.psi_mem_ms + window.psi_io_ms
     return (
         steal > config.HOST_STEAL_PCT_MAX
-        or stalled_ms > config.HOST_STALL_MS_MAX
+        or (neighbour_cores or 0.0) > config.HOST_NEIGHBOUR_CPU_CORES_MAX
         or (window.min_available_mib or 0.0) < config.HOST_MIN_AVAILABLE_MIB
     )
 
@@ -435,8 +453,11 @@ DDL = [
         host_psi_io_ms  DOUBLE PRECISION,
         host_min_available_mib DOUBLE PRECISION,
         host_contaminated BOOLEAN NOT NULL,
+        neighbour_cpu_cores DOUBLE PRECISION,
         PRIMARY KEY (window_start, branch)
     )""",
+    # Added on 2026-10-15 (contamination by the neighbours' CPU)
+    "ALTER TABLE branch_windows ADD COLUMN IF NOT EXISTS neighbour_cpu_cores DOUBLE PRECISION",
     # Ratios per message and layer, only on clean windows (fully sampled, no restart, host
     # not contaminated): a formula changes here, without recomputing a single window
     f"""CREATE OR REPLACE VIEW benchmark_ratios AS
@@ -490,11 +511,13 @@ def rebuild_day(
             by_service[service].append(Sample(ts, cid, cpu, anon, swap, faults, psi))
             layers[service] = (sbranch, layer)
         service_rows = 0
+        sampled_cpu_ms: dict[datetime, float] = defaultdict(float)
         for service, samples in by_service.items():
             sbranch, layer = layers[service]
             for wstart, w in service_windows(samples).items():
                 if not start <= wstart < end:
                     continue
+                sampled_cpu_ms[wstart] += w.cpu_ms
                 cur.execute(
                     "INSERT INTO service_windows VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
                     "%s, %s, %s, %s)",
@@ -517,16 +540,21 @@ def rebuild_day(
                 service_rows += 1
         cur.execute(
             "SELECT ts, cpu_total_ticks, cpu_steal_ticks, mem_available_bytes, mem_psi_full_us, "
-            "cpu_psi_some_us, io_psi_full_us FROM host_samples WHERE ts >= %s AND ts < %s",
+            "cpu_psi_some_us, io_psi_full_us, cpu_usec FROM host_samples "
+            "WHERE ts >= %s AND ts < %s",
             (start, end),
         )
         hosts = host_windows([HostSample(*row) for row in cur.fetchall()])
         branch_rows = 0
         for wstart, m in sorted(message_windows(message_rows).items()):
             h = hosts.get(wstart)
+            neighbours = neighbour_cpu_cores(h, sampled_cpu_ms[wstart])
             cur.execute(
-                "INSERT INTO branch_windows VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s, %s, %s)",
+                "INSERT INTO branch_windows (day, branch, window_start, messages, "
+                "latency_p50_ms, latency_p95_ms, collections, regime, rate_bucket, "
+                "host_steal_pct, host_psi_mem_ms, host_psi_cpu_ms, host_psi_io_ms, "
+                "host_min_available_mib, host_contaminated, neighbour_cpu_cores) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     day.day,
                     branch,
@@ -542,7 +570,8 @@ def rebuild_day(
                     h.psi_cpu_ms if h else None,
                     h.psi_io_ms if h else None,
                     h.min_available_mib if h else None,
-                    host_contaminated(h),
+                    host_contaminated(h, neighbours),
+                    neighbours,
                 ),
             )
             branch_rows += 1

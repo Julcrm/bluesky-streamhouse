@@ -7,8 +7,9 @@ Every COLLECTOR_INTERVAL_SECONDS it stores raw samples in the benchmark database
   counters: cumulative CPU time, real memory (`anon`), page cache, swap, major page
   faults and pressure stall time (PSI). Real memory is `anon`, not `memory.current`,
   which the reclaimable page cache fills up to the limit at no cost (D31);
-- host_samples: CPU steal (time the hypervisor gave to other tenants), host PSI, available
-  memory and swap: they only flag contaminated windows, they are no result (D32);
+- host_samples: CPU steal (time the hypervisor gave to other tenants), the host's total
+  CPU time (root cgroup: minus the sampled containers, the neighbours' share), host PSI,
+  available memory and swap: they only flag contaminated windows, they are no result (D32);
 - catalog_samples: pg_stat_database counters of the catalog databases in the shared
   Postgres, an estimate of each catalog's cost (D12).
 
@@ -61,8 +62,11 @@ DDL = [
         swap_used_bytes BIGINT,
         mem_psi_full_us BIGINT,
         cpu_psi_some_us BIGINT,
-        io_psi_full_us  BIGINT
+        io_psi_full_us  BIGINT,
+        cpu_usec        BIGINT
     )""",
+    # Added on 2026-10-15 (neighbours' CPU): tables created before lack the column
+    "ALTER TABLE host_samples ADD COLUMN IF NOT EXISTS cpu_usec BIGINT",
     """CREATE TABLE IF NOT EXISTS catalog_samples (
         ts              TIMESTAMPTZ NOT NULL,
         db              TEXT NOT NULL,
@@ -97,6 +101,7 @@ class HostSample:
     mem_psi_full_us: int | None
     cpu_psi_some_us: int | None
     io_psi_full_us: int | None
+    cpu_usec: int | None
 
 
 # --- Readers (pure, tested on fake files) ---
@@ -145,8 +150,9 @@ def read_container(cgroup: Path) -> ContainerSample:
     )
 
 
-def read_host(proc: Path) -> HostSample:
-    """CPU ticks (steal included), available memory, swap and PSI of the host."""
+def read_host(proc: Path, cgroups: Path) -> HostSample:
+    """CPU ticks (steal included), CPU time of every process (root cgroup), available
+    memory, swap and PSI of the host."""
     cpu = next(line for line in (proc / "stat").read_text().splitlines() if line.startswith("cpu "))
     ticks = [int(v) for v in cpu.split()[1:]]
     meminfo = {
@@ -162,6 +168,7 @@ def read_host(proc: Path) -> HostSample:
         mem_psi_full_us=psi_total(proc / "pressure" / "memory", "full"),
         cpu_psi_some_us=psi_total(proc / "pressure" / "cpu", "some"),
         io_psi_full_us=psi_total(proc / "pressure" / "io", "full"),
+        cpu_usec=_keyed(cgroups / "cpu.stat").get("usage_usec"),
     )
 
 
@@ -224,11 +231,14 @@ def collect_once(conn, now: datetime, containers: dict[str, str]) -> int:
                 },
             )
             rows += 1
-        host = read_host(Path(config.COLLECTOR_PROC_ROOT))
+        host = read_host(Path(config.COLLECTOR_PROC_ROOT), cgroups)
         cur.execute(
-            "INSERT INTO host_samples VALUES (%(ts)s, %(cpu_total_ticks)s, %(cpu_steal_ticks)s, "
-            "%(mem_available_bytes)s, %(swap_used_bytes)s, %(mem_psi_full_us)s, "
-            "%(cpu_psi_some_us)s, %(io_psi_full_us)s) ON CONFLICT DO NOTHING",
+            "INSERT INTO host_samples (ts, cpu_total_ticks, cpu_steal_ticks, "
+            "mem_available_bytes, swap_used_bytes, mem_psi_full_us, cpu_psi_some_us, "
+            "io_psi_full_us, cpu_usec) VALUES (%(ts)s, %(cpu_total_ticks)s, "
+            "%(cpu_steal_ticks)s, %(mem_available_bytes)s, %(swap_used_bytes)s, "
+            "%(mem_psi_full_us)s, %(cpu_psi_some_us)s, %(io_psi_full_us)s, %(cpu_usec)s) "
+            "ON CONFLICT DO NOTHING",
             {"ts": now, **asdict(host)},
         )
         rows += 1
