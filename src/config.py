@@ -299,6 +299,9 @@ ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
         "2026-10-18T19:20:00+02:00",
         _SPARK_WINDOWS_1210,
     ),
+    # First controlled-test night in prod (plan A of Julien, 15/10): after the Spark day
+    # of 18/10, ahead of the scheduled Tuesday night, which becomes a second measure
+    ("bench-spark-night-2026-10-18", "bluesky_spark_bench_night", "2026-10-18T20:00:00+02:00", {}),
 )
 # Windows of the DuckDB days never built (out of memory at every close until the windows
 # were computed by chunks, 15/10): after the last Silver/Gold run of 15/10 (20:00), one at a
@@ -316,13 +319,23 @@ def _duckdb_windows(day: str) -> dict:
     }
 
 
-ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = tuple(
-    (f"duckdb-windows-{day}-chunked", _DUCKDB_COMPLETENESS, at, _duckdb_windows(day))
-    for day, at in (
-        ("2026-10-09", "2026-10-15T20:20:00+02:00"),
-        ("2026-10-11", "2026-10-15T20:35:00+02:00"),
-        ("2026-10-13", "2026-10-15T20:50:00+02:00"),
-    )
+ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
+    *(
+        (f"duckdb-windows-{day}-chunked", _DUCKDB_COMPLETENESS, at, _duckdb_windows(day))
+        for day, at in (
+            ("2026-10-09", "2026-10-15T20:20:00+02:00"),
+            ("2026-10-11", "2026-10-15T20:35:00+02:00"),
+            ("2026-10-13", "2026-10-15T20:50:00+02:00"),
+        )
+    ),
+    # First controlled-test night in prod (plan A of Julien, 15/10): after the DuckDB day
+    # of 17/10, ahead of the scheduled Monday night, which becomes a second measure
+    (
+        "bench-duckdb-night-2026-10-17",
+        "bluesky_duckdb_bench_night",
+        "2026-10-17T20:00:00+02:00",
+        {},
+    ),
 )
 
 # --- Controlled test: "bench" mode of the engines (decision D36) ---

@@ -186,7 +186,7 @@ defs = Definitions(
         calendar_alert_sensor,
         one_off_sensor(
             "duckdb_one_off_sensor",
-            [completeness_job, maintenance_job, nightly_checks_job],
+            [completeness_job, maintenance_job, nightly_checks_job, duckdb_bench_job],
             [OneOffRun(*run) for run in config.ONE_OFF_RUNS_DUCKDB],
             timedelta(hours=config.ONE_OFF_GRACE_HOURS),
             config.ONE_OFF_SENSOR_SECONDS,

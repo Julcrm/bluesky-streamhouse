@@ -401,7 +401,12 @@ defs = Definitions(
         iceberg_completeness_sensor,
         one_off_sensor(
             "spark_one_off_sensor",
-            [iceberg_completeness_job, iceberg_maintenance_job, spark_nightly_checks_job],
+            [
+                iceberg_completeness_job,
+                iceberg_maintenance_job,
+                spark_nightly_checks_job,
+                spark_bench_job,
+            ],
             [OneOffRun(*run) for run in config.ONE_OFF_RUNS_SPARK],
             timedelta(hours=config.ONE_OFF_GRACE_HOURS),
             config.ONE_OFF_SENSOR_SECONDS,
