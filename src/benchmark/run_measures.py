@@ -4,8 +4,11 @@ before the next one empties the bench tables:
 
 - messages, throughput and latency from the branch's bench Bronze: every replayed
   message's first `processed_at`, by (partition, offset);
-  - throughput = messages / (last - first processed_at): the write window, without the
-    engine's start-up (counted in H6), the same way for both branches (H3);
+  - throughput = messages written after the first commit / (last - first processed_at):
+    exact over the write window, without the engine's start-up (counted in H6), the same
+    way for both branches (H3). The first commit's messages are left out: they were
+    written before the window starts (counting them overstated "max" by ~1/N commits,
+    local dry run of 2026-10-15). A run written in a single commit has no throughput;
   - latency = processed_at - the message's send time (its Kafka timestamp in the replay
     topic, set by the replay), p50/p95 with the interpolation of `quantile_cont`, like
     the live windows. Only meaningful at 1x and 4x: at "max" the messages wait in the
@@ -171,11 +174,13 @@ def arrival_measures(arrivals: list[Arrival], sends: dict[tuple[int, int], int] 
         return {"bronze_messages": 0}
     lo, hi = min(first.values()), max(first.values())
     seconds = (hi - lo) / 1000
+    # Messages of the first commit share its processed_at: written before the window
+    after_first = sum(1 for ms in first.values() if ms > lo)
     measures = {
         "bronze_messages": len(first),
         "first_processed_at": datetime.fromtimestamp(lo / 1000, UTC),
         "last_processed_at": datetime.fromtimestamp(hi / 1000, UTC),
-        "throughput_msg_s": len(first) / seconds if seconds > 0 else None,
+        "throughput_msg_s": after_first / seconds if seconds > 0 else None,
     }
     if sends:
         latencies = sorted(ms - sends[key] for key, ms in first.items() if key in sends)

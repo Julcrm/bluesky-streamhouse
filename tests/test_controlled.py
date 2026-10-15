@@ -7,7 +7,9 @@ from src import config
 from src.benchmark import controlled, runs
 from src.benchmark.replay import ReplayResult
 
-NIGHT = date(2026, 10, 12)
+NIGHT = date(2026, 10, 12)  # a calibration night
+# The first night after calibration (moved with the freeze)
+AFTER_CALIBRATION = date.fromisoformat(config.BENCH_CALIBRATION_UNTIL) + timedelta(days=1)
 EVENING = datetime(2026, 10, 12, 18, 0, tzinfo=UTC)  # 20:00 in Paris
 END = {0: 10, 1: 10, 2: 10}
 
@@ -99,7 +101,7 @@ def _night(store: _Store, start: datetime = EVENING, fail_clean: bool = False):
 def test_plan_calibrates_the_first_week_then_4x_and_max() -> None:
     first = controlled.night_plan(date(2026, 10, 12))
     assert [r for r, _ in first] == ["1x"] * 3 + ["4x"] * 3 + ["max"] * 3
-    later = controlled.night_plan(date(2026, 10, 19))
+    later = controlled.night_plan(AFTER_CALIBRATION)
     assert [r for r, _ in later] == ["4x"] * 3 + ["max"] * 3
 
 
@@ -144,16 +146,16 @@ def test_engine_that_never_starts_fails_the_run() -> None:
 def test_failure_before_the_run_exists_does_not_stop_the_night() -> None:
     store = _Store()
     tools, branch, _, _ = _night(store, fail_clean=True)
-    summary = controlled.run_night(tools, branch, date(2026, 10, 19))
+    summary = controlled.run_night(tools, branch, AFTER_CALIBRATION)
     assert len(summary["failed"]) == 6 and not summary["done"]
 
 
 def test_runs_that_would_end_past_the_deadline_are_skipped() -> None:
     """Started at 01:20 in Paris: no run (13-16 min estimated) fits before 01:30."""
     store = _Store()
-    late = datetime(2026, 10, 19, 23, 20, tzinfo=UTC)
+    late = controlled.night_deadline(AFTER_CALIBRATION) - timedelta(minutes=10)
     tools, branch, calls, _ = _night(store, start=late)
-    summary = controlled.run_night(tools, branch, date(2026, 10, 19))
+    summary = controlled.run_night(tools, branch, AFTER_CALIBRATION)
     assert len(summary["skipped"]) == 6 and calls == []
 
 

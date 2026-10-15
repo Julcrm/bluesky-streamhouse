@@ -46,18 +46,28 @@ def test_percentile_matches_duckdb_quantile_cont() -> None:
 
 
 def test_throughput_and_latency_from_the_first_copy() -> None:
-    """Throughput over the write window; a duplicate counts once at its first write."""
+    """Throughput over the write window, without the first commit's message; a duplicate
+    counts once at its first write."""
     arrivals = [(0, i, 10_000 + 10 * i) for i in range(101)] + [(0, 5, 99_999)]
     sends = {(0, i): 10_000 + 10 * i - 200 for i in range(101)}
     m = rm.arrival_measures(arrivals, sends)
     assert m["bronze_messages"] == 101
-    assert m["throughput_msg_s"] == pytest.approx(101 / 1.0)
+    assert m["throughput_msg_s"] == pytest.approx(100 / 1.0)
     assert m["latency_p50_ms"] == 200 and m["latency_p95_ms"] == 200
 
 
 def test_no_latency_without_send_times() -> None:
     m = rm.arrival_measures([(0, 0, 1000), (1, 0, 3000)], None)
-    assert m["throughput_msg_s"] == pytest.approx(1.0) and "latency_p50_ms" not in m
+    assert m["throughput_msg_s"] == pytest.approx(0.5) and "latency_p50_ms" not in m
+
+
+def test_throughput_leaves_the_first_commit_out() -> None:
+    """At "max": 3 commits of 50 000 messages 2 s apart. The window (4 s) only saw the
+    last two: 25 000 msg/s, not 37 500. A single commit has no throughput."""
+    arrivals = [(0, c * 50_000 + i, 10_000 + 2000 * c) for c in range(3) for i in range(50_000)]
+    assert rm.arrival_measures(arrivals, None)["throughput_msg_s"] == pytest.approx(25_000)
+    single = [(p, i, 5000) for p in range(3) for i in range(100)]
+    assert rm.arrival_measures(single, None)["throughput_msg_s"] is None
 
 
 def test_store_records_measures_and_the_view_computes_ratios() -> None:
