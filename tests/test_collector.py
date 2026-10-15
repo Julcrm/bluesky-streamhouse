@@ -60,12 +60,19 @@ def test_missing_cgroup_files_give_gaps_not_errors(tmp_path) -> None:
 
 
 def test_host_reader_counts_steal_and_memory(tmp_path) -> None:
-    host = collector.read_host(_proc(tmp_path))
+    (tmp_path / "cgroup").mkdir()
+    (tmp_path / "cgroup" / "cpu.stat").write_text("usage_usec 987654321\nuser_usec 1\n")
+    host = collector.read_host(_proc(tmp_path / "proc"), tmp_path / "cgroup")
     assert host.cpu_steal_ticks == 37
     assert host.cpu_total_ticks == 800 + 1 + 400 + 6000 + 20 + 0 + 60 + 37
     assert host.mem_available_bytes == 2400000 * 1024
     assert host.swap_used_bytes == 1000 * 1024
     assert host.mem_psi_full_us == 1500
+    assert host.cpu_usec == 987654321  # every process of the host: the root cgroup
+
+
+def test_host_cpu_is_a_gap_without_the_root_cgroup(tmp_path) -> None:
+    assert collector.read_host(_proc(tmp_path / "proc"), tmp_path / "none").cpu_usec is None
 
 
 def test_measured_containers_by_compose_service() -> None:
@@ -75,6 +82,14 @@ def test_measured_containers_by_compose_service() -> None:
         {"Id": "3" * 64, "Labels": {}},
     ]
     assert collector.measured_containers(listing) == {"spark": "1" * 64}
+
+
+def test_shared_services_are_sampled_without_a_branch() -> None:
+    """Postgres and Dagster serve both branches: their CPU is the benchmark's, not the
+    neighbours' (decision of Julien on 2026-10-15)."""
+    shared = {s for s, (branch, layer) in config.BENCHMARK_SERVICES.items() if layer == "shared"}
+    assert {"dagster-daemon", "dagster-webserver"} <= shared
+    assert all(config.BENCHMARK_SERVICES[s][0] is None for s in shared)
 
 
 def test_branches_are_the_calendars() -> None:
@@ -99,6 +114,7 @@ def test_collect_once_into_the_benchmark_tables(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(config, "COLLECTOR_PROC_ROOT", str(_proc(tmp_path / "proc")))
     monkeypatch.setattr(config, "CATALOG_DATABASES", ("postgres",))
     _cgroup(tmp_path / "cgroup", "f" * 64)
+    (tmp_path / "cgroup" / "cpu.stat").write_text("usage_usec 555\n")
     conn = collector.connect()
     try:
         with conn, conn.cursor() as cur:
@@ -115,8 +131,8 @@ def test_collect_once_into_the_benchmark_tables(tmp_path, monkeypatch) -> None:
                 "SELECT service, branch, layer, container_id, anon_bytes FROM container_samples"
             )
             assert cur.fetchall() == [("spark", "spark", "streaming", "f" * 12, 800 * 2**20)]
-            cur.execute("SELECT cpu_steal_ticks FROM host_samples")
-            assert cur.fetchall() == [(37,)]
+            cur.execute("SELECT cpu_steal_ticks, cpu_usec FROM host_samples")
+            assert cur.fetchall() == [(37, 555)]
             cur.execute("SELECT db FROM catalog_samples")
             assert cur.fetchall() == [("postgres",)]
         collector.purge(conn, datetime(2026, 12, 1, tzinfo=UTC))

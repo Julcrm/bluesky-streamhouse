@@ -69,6 +69,50 @@ def test_host_steal_share_and_contamination(monkeypatch) -> None:
     assert w.host_contaminated(None)
 
 
+def test_neighbours_cpu_is_the_host_minus_the_sampled_containers() -> None:
+    """Host: 600 CPU seconds over a 5-minute window (2 cores); sampled containers: 480 s,
+    so the neighbours used 120 s = 0.4 core: clean. 330 s left to them: 1.1 cores."""
+
+    def h(seconds: int, cpu_s: int | None) -> w.HostSample:
+        cpu = None if cpu_s is None else cpu_s * 1_000_000
+        return w.HostSample(T0 + timedelta(seconds=seconds), seconds, 0, 4096 * MIB, 0, 0, 0, cpu)
+
+    host = w.host_windows([h(0, 0), h(300, 600)])[T0]
+    assert host.cpu_ms == pytest.approx(600_000)
+    assert w.neighbour_cpu_cores(host, 480_000) == pytest.approx(0.4)
+    assert not w.host_contaminated(host, 0.4)
+    assert w.neighbour_cpu_cores(host, 270_000) == pytest.approx(1.1)
+    assert w.host_contaminated(host, 1.1)
+    # Sampling jitter never gives negative cores
+    assert w.neighbour_cpu_cores(host, 700_000) == 0.0
+    # Samples before the host's CPU was collected: unknown, judged on steal and memory
+    old = w.host_windows([h(0, None), h(300, None)])[T0]
+    assert w.neighbour_cpu_cores(old, 0) is None
+    assert not w.host_contaminated(old, None)
+
+
+def test_the_branch_own_pressure_is_no_contamination() -> None:
+    """A Spark day stalls the host's CPU and memory (15/10): the branch itself, not the
+    neighbours, so the window stays clean."""
+    loaded = w.host_windows(
+        [
+            w.HostSample(T0, 0, 0, 4096 * MIB, 0, 0, 0, 0),
+            w.HostSample(
+                T0 + timedelta(seconds=300),
+                1000,
+                0,
+                4096 * MIB,
+                20_000_000,
+                65_000_000,
+                10_000_000,
+                0,
+            ),
+        ]
+    )[T0]
+    assert loaded.psi_cpu_ms == pytest.approx(65_000)
+    assert not w.host_contaminated(loaded, 0.1)
+
+
 def test_rate_buckets() -> None:
     assert w.rate_bucket(150 * 300) == "0-200"
     assert w.rate_bucket(250 * 300) == "200-500"
@@ -232,9 +276,10 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
                     "'c1', %s, %s, 0, 0, 0, 0, 0, 0)",
                     (ts, i * 1_000_000, 500 * MIB),
                 )
+                # Host: the container's CPU second plus 0.2 s of the neighbours per tick
                 cur.execute(
-                    "INSERT INTO host_samples VALUES (%s, %s, %s, %s, 0, 0, 0, 0)",
-                    (ts, i * 100, 0, 4096 * MIB),
+                    "INSERT INTO host_samples VALUES (%s, %s, %s, %s, 0, 0, 0, 0, %s)",
+                    (ts, i * 100, 0, 4096 * MIB, i * 1_200_000),
                 )
         day = _day(opened_at=T0, stopped_at=T0 + timedelta(minutes=10))
         epoch = int(T0.timestamp())
@@ -256,5 +301,9 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
         assert ratios[0][3] == pytest.approx(30_000 / 600)
         assert ratios[0][4] == pytest.approx(500 * 300 * 10_000 / 600)
         assert ratios[1][3] == pytest.approx(30_000 / 300)
+        with conn.cursor() as cur:
+            cur.execute("SELECT neighbour_cpu_cores FROM branch_windows ORDER BY window_start")
+            # 0.2 s per 10 s = 0.02 core
+            assert [r[0] for r in cur.fetchall()] == [pytest.approx(0.02)] * 2
     finally:
         conn.close()
