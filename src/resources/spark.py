@@ -3,7 +3,8 @@ Spark session of the Spark branch (local mode, single node) with the Iceberg RES
 (Lakekeeper, decision D26). Shared by the streaming job and the Iceberg maintenance;
 the Thrift server of dbt-spark (D6 revised) starts with the same catalog settings.
 
-Lakekeeper signs the S3 requests of the session (remote signing): no S3 key here.
+S3 key from the environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, the AWS SDK's
+default chain), like the DuckDB branch: the warehouse has no remote signing (2026-10-16).
 """
 
 import glob
@@ -23,8 +24,6 @@ def catalog_conf() -> dict[str, str]:
         f"{catalog}.type": "rest",
         f"{catalog}.uri": config.ICEBERG_CATALOG_URI,
         f"{catalog}.warehouse": config.ICEBERG_WAREHOUSE,
-        # Ask Lakekeeper to sign S3 requests rather than hand out credentials
-        f"{catalog}.header.X-Iceberg-Access-Delegation": "remote-signing",
     }
 
 

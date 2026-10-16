@@ -389,8 +389,9 @@ ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
 
 # --- Spark branch: Spark Structured Streaming -> Iceberg (phase 4) ---
-# Iceberg REST catalog (Lakekeeper, Postgres-backed). It signs the S3 requests of its
-# clients (remote signing): Spark holds no S3 key. Garage has no STS for vended creds
+# Iceberg REST catalog (Lakekeeper, Postgres-backed). Spark reads and writes S3 with its own
+# key, like the DuckDB branch: remote signing (one Lakekeeper call per S3 request) is off
+# since 2026-10-16. Garage has no STS for vended creds
 ICEBERG_CATALOG_URI = os.getenv("ICEBERG_CATALOG_URI", "http://localhost:8181/catalog")
 ICEBERG_WAREHOUSE = os.getenv("ICEBERG_WAREHOUSE", "bluesky")
 # Spark catalog name: tables are lakekeeper.<namespace>.<table>
@@ -463,10 +464,11 @@ SPARK_THRIFT_PORT = 10000
 # Two cores, as the DuckDB branch's dbt runs DuckDB with 2 threads (same transform budget). With
 # local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
 SPARK_THRIFT_CORES = 2
-# Heap of the server JVM; the rest of the 1.5 GB container is off-heap (~600 MB of
-# metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
-# 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
-SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
+# Heap of the server JVM; ~600 MB more off-heap (metaspace, code cache and native memory,
+# whatever the heap). D31: 768 MB peaked at 1.37 GiB (2026-10-07) but its old generation
+# filled up during passes and the JVM exited on OutOfMemoryError 8 times (12-15/10): 1 GB
+# since 2026-10-16, in a 2 GB container (a 1 GB heap in 1.75 GB was OOM-killed)
+SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "1024m")
 # One run at a time in the Spark branch's location (D30): maintenance and completeness wait for
 # the other runs (a 07:00 Silver/Gold catch-up included) up to this long
 SPARK_RUN_WAIT_SECONDS = 2 * 60 * 60

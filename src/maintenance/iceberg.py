@@ -6,8 +6,8 @@ result (operational complexity).
 Order, nightly, table by table: retention DELETE (whole partitions, D14),
 rewrite_data_files (merge the small files of 5-second commits and 15-minute runs),
 rewrite_manifests, expire_snapshots (24 h of time travel, like DuckLake),
-remove_orphan_files (failed writes). Every file deletion goes through Lakekeeper's
-remote signing (no S3 key in Spark).
+remove_orphan_files (failed writes). Spark deletes the files with its own S3 key;
+DROP TABLE goes to Lakekeeper, which deletes them (hard delete profile).
 
 Every statement runs on the Spark Thrift server (D6 revised, 5d), as SQL: the code
 server of the Spark branch holds no JVM. Functions take the statement runner as their
