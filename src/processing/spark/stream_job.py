@@ -3,8 +3,8 @@ Spark branch streaming job: `raw_events` (Redpanda) -> Iceberg Bronze, with Spar
 Structured Streaming. Same contract as the DuckDB branch (src/processing/bronze.py): same
 columns, one micro-batch every 5 s capped at 50 000 messages (decisions D10, D13).
 
-- Catalog: Lakekeeper (Iceberg REST, Postgres-backed). It signs Spark's S3 requests
-  (remote signing): no S3 key in this job.
+- Catalog: Lakekeeper (Iceberg REST, Postgres-backed). S3 key from the environment,
+  like the DuckDB branch (no remote signing since 2026-10-16).
 - Benchmark day (decision D28): started by the supervisor with ALTERNATION_DAY, the job
   reads from the day's start offsets (one checkpoint per day), drops what is past the
   end offsets, waits for them from 19:00, records caught_up_at and marks the day done

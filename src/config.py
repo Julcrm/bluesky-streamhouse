@@ -357,8 +357,9 @@ ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
 
 # --- Spark branch: Spark Structured Streaming -> Iceberg (phase 4) ---
-# Iceberg REST catalog (Lakekeeper, Postgres-backed). It signs the S3 requests of its
-# clients (remote signing): Spark holds no S3 key. Garage has no STS for vended creds
+# Iceberg REST catalog (Lakekeeper, Postgres-backed). Spark reads and writes S3 with its own
+# key, like the DuckDB branch: remote signing (one Lakekeeper call per S3 request) is off
+# since 2026-10-16. Garage has no STS for vended creds
 ICEBERG_CATALOG_URI = os.getenv("ICEBERG_CATALOG_URI", "http://localhost:8181/catalog")
 ICEBERG_WAREHOUSE = os.getenv("ICEBERG_WAREHOUSE", "bluesky")
 # Spark catalog name: tables are lakekeeper.<namespace>.<table>

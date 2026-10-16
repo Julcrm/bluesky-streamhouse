@@ -226,7 +226,7 @@ services:
       - coolify
     restart: "no"
 
-  # Spark Structured Streaming -> Iceberg Bronze. No S3 key: Lakekeeper signs
+  # Spark Structured Streaming -> Iceberg Bronze
   spark:
     build:
       context: .
@@ -234,6 +234,14 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # S3 key, like the DuckDB branch: the warehouse has no remote signing (2026-10-16).
+      # Checksums only when required: Garage rejects the AWS SDK's default ones
+      # ("Invalid payload signature")
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=us-east-1
+      - AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
+      - AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
       # Benchmark calendar (database bluesky_benchmark, D28), read by the supervisor
       - POSTGRES_HOST=${POSTGRES_HOST}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
@@ -346,6 +354,14 @@ services:
       - "10000"
     environment:
       - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
+      # S3 key, like the DuckDB branch: the warehouse has no remote signing (2026-10-16).
+      # Checksums only when required: Garage rejects the AWS SDK's default ones
+      # ("Invalid payload signature")
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=us-east-1
+      - AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED
+      - AWS_RESPONSE_CHECKSUM_VALIDATION=WHEN_REQUIRED
       # Benchmark calendar (database bluesky_benchmark, D28), read by the supervisor
       - POSTGRES_HOST=${POSTGRES_HOST}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
