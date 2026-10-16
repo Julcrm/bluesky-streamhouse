@@ -17,7 +17,7 @@
 -- =============================================================================
 
 {% macro silver_progress_table() -%}
-    meta.silver_progress
+    {{ bench_prefix() }}meta.silver_progress
 {%- endmacro %}
 
 

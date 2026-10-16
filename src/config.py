@@ -299,32 +299,64 @@ ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
         "2026-10-18T19:20:00+02:00",
         _SPARK_WINDOWS_1210,
     ),
+    # First controlled-test night in prod (plan A of Julien, 15/10): after the Spark day
+    # of 18/10, ahead of the scheduled Tuesday night, which becomes a second measure
+    ("bench-spark-night-2026-10-18", "bluesky_spark_bench_night", "2026-10-18T20:00:00+02:00", {}),
 )
-# Windows of the DuckDB days never built (out of memory at every close until the windows
-# were computed by chunks, 15/10): after the last Silver/Gold run of 15/10 (20:00), one at a
-# time (1 GB each), before the DuckLake retention cuts a day (02:00, UTC midnight - 7 days:
-# 09/10 is cut on 16/10, 11/10 on 18/10, 13/10 on 20/10). 15/10 is built at its own close
-_DUCKDB_COMPLETENESS = "bluesky_ducklake_day_completeness"
-
-
-def _duckdb_windows(day: str) -> dict:
-    return {
-        "ops": {
-            "bluesky__duckdb__alternation__ducklake_day_completeness": {"config": {"day": day}},
-            "bluesky__duckdb__benchmark__duckdb_benchmark_windows": {"config": {"day": day}},
-        }
-    }
-
-
-ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = tuple(
-    (f"duckdb-windows-{day}-chunked", _DUCKDB_COMPLETENESS, at, _duckdb_windows(day))
-    for day, at in (
-        ("2026-10-09", "2026-10-15T20:20:00+02:00"),
-        ("2026-10-11", "2026-10-15T20:35:00+02:00"),
-        ("2026-10-13", "2026-10-15T20:50:00+02:00"),
-    )
+ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
+    # First controlled-test night in prod (plan A of Julien, 15/10): after the DuckDB day
+    # of 17/10, ahead of the scheduled Monday night, which becomes a second measure
+    (
+        "bench-duckdb-night-2026-10-17",
+        "bluesky_duckdb_bench_night",
+        "2026-10-17T20:00:00+02:00",
+        {},
+    ),
 )
 
+# --- Controlled test: "bench" mode of the engines (decision D36) ---
+# The supervisor starts its engine with BENCH_RUN=<run id> for a requested run of
+# bench_runs, never while a day of its branch is active. The engine then reads the
+# replay topic and writes isolated tables; it stops once its position reaches the end
+# offsets the replay recorded
+BENCH_TOPIC = "bench_raw_events"
+BENCH_QUIX_CONSUMER_GROUP = "bench-quix"
+# DuckLake: separate catalogs (own metadata schemas and data paths), same aliases, so
+# the SQL is unchanged. Snapshots are catalog-wide: the test must not touch the state
+# of the production catalogs (H8b)
+DUCKLAKE_BENCH_BRONZE_METADATA_SCHEMA = "bench_bronze"
+DUCKLAKE_BENCH_TRANSFORM_METADATA_SCHEMA = "bench_transform"
+DUCKLAKE_BENCH_BRONZE_DATA_PATH = f"s3://{BUCKET}/bench/ducklake/bronze/"
+DUCKLAKE_BENCH_TRANSFORM_DATA_PATH = f"s3://{BUCKET}/bench/ducklake/transform/"
+# Iceberg: each table has its own state, separate namespaces are enough
+ICEBERG_BENCH_PREFIX = "bench_"
+# Engines read their run's end offsets this often until the replay records them
+BENCH_BOUNDS_POLL_SECONDS = 10
+# Nights of the controlled test (D36): Monday and Tuesday at 20:00, after the day of
+# each branch (the job of a branch runs only after its own day), over by 01:30 (the
+# DuckDB maintenance starts at 02:00)
+BENCH_NIGHT_CRON = "0 20 * * 1,2"
+BENCH_DEADLINE = "01:30"
+BENCH_REPETITIONS = 3
+# Calibration week: 1x too (it checks the replay costs the same as the live); then 4x
+# and max only. Nights up to this date (Europe/Paris) calibrate. Moved on 2026-10-15
+# (decision of Julien): the freeze slipped to ~19-20/10, calibration is its first week;
+# to set again at the freeze commit
+BENCH_CALIBRATION_UNTIL = "2026-10-27"
+# After the engine started on a 1x or 4x run, before the replay: the JVM of Spark takes
+# 30-60 s to consume, Quix a few seconds; the same wait for both keeps the start-up out
+# of the steady-state latency (start-up costs are counted in H6)
+BENCH_WARMUP_SECONDS = 60
+# The supervisor polls every 30 s and an engine may take a minute to start
+BENCH_START_TIMEOUT_SECONDS = 600
+# A run is started only if its estimate fits before the deadline: replay (sample length
+# / factor, or this for max), warm-up, ingestion tail, then Silver/Gold of the branch
+BENCH_MAX_REPLAY_ESTIMATE_SECONDS = 180
+BENCH_TRANSFORM_ESTIMATE_SECONDS = {"duckdb": 300, "spark": 900}
+BENCH_RUN_MARGIN_SECONDS = 300
+# After Silver/Gold, before measuring: the collector (every 10 s) must have sampled past
+# the end of the phase for the integrals to cover it
+BENCH_MEASURE_DELAY_SECONDS = 15
 # The supervisor of each engine container reads the calendar this often
 SUPERVISOR_POLL_SECONDS = 30
 # Heartbeat of the supervisors and the producer, read by the container healthchecks
@@ -357,8 +389,9 @@ ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 ALERT_FROM = "Dagster <alerts@julien-castellano.fr>"
 
 # --- Spark branch: Spark Structured Streaming -> Iceberg (phase 4) ---
-# Iceberg REST catalog (Lakekeeper, Postgres-backed). It signs the S3 requests of its
-# clients (remote signing): Spark holds no S3 key. Garage has no STS for vended creds
+# Iceberg REST catalog (Lakekeeper, Postgres-backed). Spark reads and writes S3 with its own
+# key, like the DuckDB branch: remote signing (one Lakekeeper call per S3 request) is off
+# since 2026-10-16. Garage has no STS for vended creds
 ICEBERG_CATALOG_URI = os.getenv("ICEBERG_CATALOG_URI", "http://localhost:8181/catalog")
 ICEBERG_WAREHOUSE = os.getenv("ICEBERG_WAREHOUSE", "bluesky")
 # Spark catalog name: tables are lakekeeper.<namespace>.<table>
@@ -372,6 +405,11 @@ SPARK_CHECKPOINT_DIR = os.getenv("SPARK_CHECKPOINT_DIR", "state/spark-checkpoint
 # resumes its own. The last days are kept, older ones deleted
 SPARK_DAY_CHECKPOINTS_DIR = os.getenv("SPARK_DAY_CHECKPOINTS_DIR", "state/spark-checkpoint/days")
 SPARK_DAY_CHECKPOINTS_KEPT = 2
+# One checkpoint per controlled-test run (D36), on the same volume, apart from the days
+# so their pruning never sees them; deleted when the run starts again or is cleaned up
+SPARK_BENCH_CHECKPOINTS_DIR = os.getenv(
+    "SPARK_BENCH_CHECKPOINTS_DIR", "state/spark-checkpoint/bench"
+)
 # Snapshot summary property holding "<query id>:<batch id>" of each Bronze append: a
 # micro-batch replayed after a crash finds its key and is not written twice (what the
 # native Iceberg streaming sink does, redone in foreachBatch for the day bounds)
@@ -426,10 +464,11 @@ SPARK_THRIFT_PORT = 10000
 # Two cores, as the DuckDB branch's dbt runs DuckDB with 2 threads (same transform budget). With
 # local[*] (12 cores locally) 12 Parquet writers buffering row groups overflowed the heap
 SPARK_THRIFT_CORES = 2
-# Heap of the server JVM; the rest of the 1.5 GB container is off-heap (~600 MB of
-# metaspace, code cache and native memory, whatever the heap). D31, measured 2026-10-07:
-# 768 MB peaks at 1.37 GiB over 500 000-row passes + dbt build; 1 GB was OOM-killed
-SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "768m")
+# Heap of the server JVM; ~600 MB more off-heap (metaspace, code cache and native memory,
+# whatever the heap). D31: 768 MB peaked at 1.37 GiB (2026-10-07) but its old generation
+# filled up during passes and the JVM exited on OutOfMemoryError 8 times (12-15/10): 1 GB
+# since 2026-10-16, in a 2 GB container (a 1 GB heap in 1.75 GB was OOM-killed)
+SPARK_THRIFT_DRIVER_MEMORY = os.getenv("SPARK_THRIFT_DRIVER_MEMORY", "1024m")
 # One run at a time in the Spark branch's location (D30): maintenance and completeness wait for
 # the other runs (a 07:00 Silver/Gold catch-up included) up to this long
 SPARK_RUN_WAIT_SECONDS = 2 * 60 * 60

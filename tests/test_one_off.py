@@ -60,3 +60,21 @@ def test_configured_entries_have_unique_keys_and_valid_times() -> None:
     assert len(keys) == len(set(keys))
     for run in runs:
         assert datetime.fromisoformat(run[2]).tzinfo is not None
+
+
+def test_bench_nights_fall_after_a_day_of_their_branch() -> None:
+    """A controlled-test night fails at once on a day of the other branch (wait_for_day_end):
+    each one-off night is in its branch's location, on its branch's day, after the close."""
+    from src.alternation import calendar as cal
+
+    for branch, runs in (
+        ("spark", config.ONE_OFF_RUNS_SPARK),
+        ("duckdb", config.ONE_OFF_RUNS_DUCKDB),
+    ):
+        for key, job_name, at, _ in runs:
+            if not job_name.endswith("_bench_night"):
+                continue
+            moment = datetime.fromisoformat(at).astimezone(cal.TIMEZONE)
+            assert job_name == f"bluesky_{branch}_bench_night", key
+            assert cal.branch_for(moment.date()) == branch, key
+            assert moment >= cal.at(moment.date(), config.ALTERNATION_CLOSE_TIME), key
