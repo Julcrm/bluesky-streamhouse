@@ -3,7 +3,8 @@ version: 2
 sources:
   - name: bronze
     description: "Bronze layer written by the Spark streaming job (contract in src/processing/bronze.py)"
-    schema: bronze
+    # bench_bronze with --target bench (controlled test, macros/bench.sql)
+    schema: "{{ 'bench_' if target.name == 'bench' else '' }}bronze"
     tables:
       - name: bronze_events
         meta:

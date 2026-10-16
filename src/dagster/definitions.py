@@ -21,6 +21,7 @@ from dagster_dbt import DbtCliResource
 from src import config
 from src.alternation import calendar as cal
 from src.alternation import monitor
+from src.benchmark.cleanup import drop_ducklake_bench
 from src.dagster.alternation import (
     branch_calendar,
     calendar_job,
@@ -31,6 +32,7 @@ from src.dagster.alternation import (
     open_day_schedule,
 )
 from src.dagster.assets import bluesky_dbt_models, dbt_project, quix_bronze
+from src.dagster.bench import bench_night_definitions, duckdb_arrivals, duckdb_transform
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.one_off import OneOffRun, one_off_sensor
@@ -142,6 +144,15 @@ def nightly_checks_schedule(context: ScheduleEvaluationContext) -> RunRequest | 
     return RunRequest(tags={"bluesky/nightly_checks_due": due})
 
 
+# Controlled test (D36): the night after a DuckDB day, on the bench catalogs
+duckdb_bench_job, duckdb_bench_schedule = bench_night_definitions(
+    cal.BRANCH_DUCKDB,
+    drop_ducklake_bench,
+    duckdb_transform(dbt_project.manifest_path),
+    duckdb_arrivals,
+)
+
+
 defs = Definitions(
     assets=[
         quix_bronze,
@@ -159,6 +170,7 @@ defs = Definitions(
         calendar_job,
         completeness_job,
         sample_job,
+        duckdb_bench_job,
     ],
     schedules=[
         silver_gold_schedule,
@@ -167,13 +179,14 @@ defs = Definitions(
         open_day_schedule,
         close_day_schedule,
         sample_schedule,
+        duckdb_bench_schedule,
     ],
     sensors=[
         failure_alert_sensor,
         calendar_alert_sensor,
         one_off_sensor(
             "duckdb_one_off_sensor",
-            [completeness_job, maintenance_job, nightly_checks_job],
+            [completeness_job, maintenance_job, nightly_checks_job, duckdb_bench_job],
             [OneOffRun(*run) for run in config.ONE_OFF_RUNS_DUCKDB],
             timedelta(hours=config.ONE_OFF_GRACE_HOURS),
             config.ONE_OFF_SENSOR_SECONDS,

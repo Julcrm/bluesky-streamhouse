@@ -53,6 +53,18 @@ def high_watermarks(topic: str = config.RAW_EVENTS_TOPIC) -> Offsets:
         }
 
 
+def watermarks(topic: str) -> dict[int, tuple[int, int]]:
+    """(low, high) watermark of each partition: the first offset still retained and
+    the next one to be written (the frozen sample of the controlled test)."""
+    with _consumer() as consumer:
+        return {
+            tp.partition: consumer.get_watermark_offsets(
+                tp, timeout=LOOKUP_TIMEOUT_SECONDS, cached=False
+            )
+            for tp in _partitions(topic)
+        }
+
+
 def offsets_at(moment: datetime, topic: str = config.RAW_EVENTS_TOPIC) -> Offsets:
     """First offset of each partition whose timestamp is at or after `moment`; the high
     watermark when there is none yet. Fallback only: the producer stamps messages with

@@ -17,7 +17,10 @@ nightly maintenance holds it, the sink pauses and catches up afterwards.
 Started by the supervisor (decision D28), the app works on one benchmark day: it starts
 from the day's start offsets, drops what is past its end offsets, records when it caught
 up, and marks the day done once its commits reach the end (src.alternation.engine).
-Run by hand without ALTERNATION_DAY, it consumes without bounds (local development).
+Started with BENCH_RUN instead (controlled test, D36), it works on one run the same way:
+the replay topic, its own consumer group and a separate DuckLake catalog
+(src.benchmark.runs). Run by hand without either, it consumes without bounds (local
+development).
 """
 
 import threading
@@ -36,6 +39,7 @@ from quixstreams.sinks import BatchingSink, SinkBackpressureError, SinkBatch
 
 from src import config
 from src.alternation.engine import EngineDay
+from src.benchmark.runs import BenchRun
 from src.processing.bronze import (
     BRONZE_COLUMN_NAMES,
     BRONZE_COLUMNS,
@@ -47,7 +51,13 @@ from src.processing.bronze import (
 )
 from src.resources import redpanda
 from src.resources.bronze_lock import SharedBronzeLock
-from src.resources.ducklake import DuckLakeSettings, connect, set_write_options, sql_literal
+from src.resources.ducklake import (
+    DuckLakeSettings,
+    bench_settings,
+    connect,
+    set_write_options,
+    sql_literal,
+)
 
 # Pause consumption this long when Garage or the Postgres catalog is unreachable
 BACKPRESSURE_RETRY_SECONDS = 10.0
@@ -260,11 +270,12 @@ class DuckLakeBronzeSink(BatchingSink):
                 self._conn = None
 
 
-def build_app() -> Application:
-    """Quix application on `raw_events`, with the DuckDB branch consumer group."""
+def build_app(consumer_group: str = config.QUIX_CONSUMER_GROUP) -> Application:
+    """Quix application with the DuckDB branch consumer group (its bench group in the
+    controlled test)."""
     return Application(
         broker_address=config.KAFKA_BOOTSTRAP_SERVERS,
-        consumer_group=config.QUIX_CONSUMER_GROUP,
+        consumer_group=consumer_group,
         auto_offset_reset=config.QUIX_AUTO_OFFSET_RESET,
         commit_interval=config.QUIX_COMMIT_INTERVAL_SECONDS,
         commit_every=config.QUIX_COMMIT_EVERY,
@@ -283,7 +294,7 @@ def newest_event_time(rows: pa.Table) -> datetime | None:
     return pc.max(rows.column("event_time")).as_py()
 
 
-def in_day(day: EngineDay) -> Callable[[Any], bool]:
+def in_day(day: EngineDay | BenchRun) -> Callable[[Any], bool]:
     """Filter keeping the messages before the day's end offsets (known from 19:00)."""
 
     def keep(_value: Any) -> bool:
@@ -293,12 +304,17 @@ def in_day(day: EngineDay) -> Callable[[Any], bool]:
     return keep
 
 
-def watch_completion(day: EngineDay, stop: threading.Event) -> None:
-    """Mark the day done once the group's committed offsets reach its end. Quix commits
-    only after the sink flushed, so every message before the end is in Bronze."""
+def watch_completion(
+    day: EngineDay | BenchRun,
+    stop: threading.Event,
+    group: str = config.QUIX_CONSUMER_GROUP,
+    topic: str = config.RAW_EVENTS_TOPIC,
+) -> None:
+    """Mark the day (or run) done once the group's committed offsets reach its end. Quix
+    commits only after the sink flushed, so every message before the end is in Bronze."""
     while not stop.wait(COMPLETION_CHECK_SECONDS):
         try:
-            position = redpanda.committed_offsets(config.QUIX_CONSUMER_GROUP)
+            position = redpanda.committed_offsets(group, topic)
         except Exception as e:  # noqa: BLE001 - checked again at the next interval
             logger.warning(f"Reading the committed offsets failed ({e})")
             continue
@@ -307,22 +323,29 @@ def watch_completion(day: EngineDay, stop: threading.Event) -> None:
 
 
 def main() -> None:
-    """Entry point: raw_events → (day bounds) → parse → DuckLake Bronze."""
-    day = EngineDay.from_env()
+    """Entry point: raw_events → (day bounds) → parse → DuckLake Bronze; in bench mode,
+    the replay topic → (run bounds) → parse → the bench catalog's Bronze."""
+    bench = BenchRun.from_env()
+    day = bench or EngineDay.from_env()
+    group = config.BENCH_QUIX_CONSUMER_GROUP if bench else config.QUIX_CONSUMER_GROUP
+    topic_name = config.BENCH_TOPIC if bench else config.RAW_EVENTS_TOPIC
+    settings = bench_settings(DuckLakeSettings()) if bench else DuckLakeSettings()
     if day is not None:
         # Before the app joins the group: committing for an empty group is safe
-        day.prepare(lambda offsets: redpanda.commit_offsets(config.QUIX_CONSUMER_GROUP, offsets))
-    app = build_app()
-    topic = app.topic(config.RAW_EVENTS_TOPIC, value_deserializer="json")
+        day.prepare(lambda offsets: redpanda.commit_offsets(group, offsets, topic_name))
+    app = build_app(group)
+    topic = app.topic(topic_name, value_deserializer="json")
     sdf = app.dataframe(topic)
     if day is not None:
         sdf = sdf.filter(in_day(day))
     sdf = sdf.apply(parse_bronze_event).filter(lambda event: event is not None)
     on_commit = None if day is None else lambda rows: day.record_commit(newest_event_time(rows))
-    sdf.sink(DuckLakeBronzeSink(on_commit=on_commit))
+    sdf.sink(DuckLakeBronzeSink(settings=settings, on_commit=on_commit))
     stop = threading.Event()
     if day is not None:
-        threading.Thread(target=watch_completion, args=(day, stop), daemon=True).start()
+        threading.Thread(
+            target=watch_completion, args=(day, stop, group, topic_name), daemon=True
+        ).start()
     try:
         app.run()
     finally:
