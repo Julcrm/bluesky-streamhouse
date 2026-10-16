@@ -6,32 +6,25 @@ A streaming lakehouse benchmark deployed on a single VPS: the live Bluesky fireh
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    jetstream["Bluesky Jetstream (WebSocket)"] --> producer["producer (Python)"]
-    producer --> redpanda[("Redpanda topic raw_events")]
-
-    redpanda -->|"DuckDB days, 07:00-19:00"| quix
-    redpanda -->|"Spark days, 07:00-19:00"| sss
-
-    subgraph duckdb["DuckDB branch"]
-        quix["Quix Streams"] --> dl_bronze[("Bronze<br/>DuckLake, catalog in Postgres")]
-        dl_bronze --> dbt_duckdb["dbt-duckdb"]
-        dbt_duckdb --> dl_gold[("Silver and Gold<br/>DuckLake")]
-    end
-
-    subgraph spark["Spark branch"]
-        sss["Spark Structured Streaming"] --> ice_bronze[("Bronze<br/>Iceberg, Lakekeeper REST catalog")]
-        ice_bronze --> dbt_spark["dbt-spark via Spark Thrift server"]
-        dbt_spark --> ice_gold[("Silver and Gold<br/>Iceberg")]
-    end
-
-    dl_gold --> parity{{"Same contract, same tests,<br/>Gold parity checked"}}
-    ice_gold --> parity
+```
+Bluesky Jetstream (WebSocket)
+        ↓
+Redpanda — raw_events topic, shared by both branches
+        ↓
+one branch per day, 07:00-19:00, alternating
+        ↓                                        ↓
+DuckDB branch                                    Spark branch
+        ↓                                        ↓
+Bronze — Quix Streams → DuckLake                 Bronze — Spark Structured Streaming → Iceberg
+        ↓                                        ↓
+Silver — dbt + DuckDB                            Silver — dbt + Spark (Thrift server)
+        ↓                                        ↓
+Gold   — dbt + DuckDB                            Gold   — dbt + Spark (Thrift server)
+        ↓                                        ↓
+        └──────── same contract, same tests, Gold parity checked ────────┘
 ```
 
-- **Shared by both branches**: the producer, Redpanda and Garage (S3-compatible storage for every data file). The branches alternate day by day, so the same day of the week swaps every week.
-- **Measured** by `bench-collector`: cgroup samples of every container every 10 s, turned into 5-minute windows in a benchmark database.
+Data files of both branches on Garage (S3-compatible); catalogs in Postgres (DuckLake) and Lakekeeper (Iceberg REST). Every container is measured by `bench-collector` (cgroup samples every 10 s).
 
 Orchestrated by **Dagster**, one code location per branch: Silver/Gold every 15 minutes during the branch's day, nightly maintenance and tests, and a weekly controlled test.
 
