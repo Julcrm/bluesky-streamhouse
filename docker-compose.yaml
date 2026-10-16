@@ -324,7 +324,7 @@ services:
         limits:
           # Same limit as before the Thrift server (D31, 2026-10-08): Dagster and the dbt
           # client take ~640 MiB, the Iceberg maintenance's own JVM fits until 5d. With
-          # spark-thrift, the Spark branch's transform may use up to 3.25 GB against 2.5 GB
+          # spark-thrift, the Spark branch's transform may use up to 3.5 GB against 2.5 GB
           # for the DuckDB branch: limits
           # are ceilings, reported as context; the benchmark compares the measured
           # consumption (phase 7). Swap: Docker's default, as bluesky-duckdb
@@ -343,7 +343,7 @@ services:
   # Spark Thrift server (D6 revised): one long-lived JVM, local[2], that dbt-spark reaches
   # through PyHive. Its supervisor (service mode) runs it while the Spark branch owns the
   # latest opened day: its Silver/Gold, the nightly maintenance and tests; stopped on the
-  # DuckDB branch's days. With bluesky-spark, the Spark branch's transform (3.25 GB, D31)
+  # DuckDB branch's days. With bluesky-spark, the Spark branch's transform (3.5 GB, D31)
   spark-thrift:
     build:
       context: .
@@ -367,9 +367,11 @@ services:
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      # Heap 768 MB (D31, measured 2026-10-07: 7 passes of 500 000 rows + dbt build, peak
-      # 1.37 GiB); ~600 MB more off-heap whatever the heap. A 1 GB heap was OOM-killed
-      - SPARK_THRIFT_DRIVER_MEMORY=768m
+      # Heap 1 GB (D31, H1 on 2026-10-16): with 768 MB, the old generation ran at 335-521 of
+      # 512 MB during a pass and the JVM exited on OutOfMemoryError 8 times (12-15/10).
+      # ~600 MB more off-heap whatever the heap: the container limit grows with it (a 1 GB
+      # heap in 1.75 GB was OOM-killed on 2026-10-07)
+      - SPARK_THRIFT_DRIVER_MEMORY=1024m
       - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
       - MALLOC_ARENA_MAX=2
     stop_grace_period: 30s
@@ -383,14 +385,16 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1792M  # anon peak 1,356 MiB, full catch-up + dbt build (2026-10-08)
+          # Heap 1 GB + ~600 MB off-heap + ~400 MB of margin (anon peak 1,356 MiB with
+          # the 768 MB heap, full catch-up + dbt build, 2026-10-08)
+          memory: 2048M
         # Protected from reclaim by the neighbours (memory.low, D31): the working set
         # measured on 2026-10-08, so other projects' memory goes first under pressure
         reservations:
           memory: 1536M
     # No swap for the JVM (D31): garbage collections walk the whole heap, a swapped-out
     # heap would stall every pass
-    memswap_limit: 1792M
+    memswap_limit: 2048M
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully

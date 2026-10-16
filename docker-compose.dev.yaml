@@ -239,7 +239,7 @@ services:
       AWS_REGION: us-east-1
       AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
-      SPARK_THRIFT_DRIVER_MEMORY: 768m
+      SPARK_THRIFT_DRIVER_MEMORY: 1024m
       SPARK_DRIVER_JAVA_OPTIONS: >-
         -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
         -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
@@ -257,8 +257,8 @@ services:
       retries: 24
       start_period: 15s
     # Same limits as prod (D31): no swap for the JVM
-    mem_limit: 1792m
-    memswap_limit: 1792m
+    mem_limit: 2048m
+    memswap_limit: 2048m
     depends_on:
       lakekeeper-init:
         condition: service_completed_successfully
