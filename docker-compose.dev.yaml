@@ -16,7 +16,7 @@
 #   - dbt-spark:        dbt build of the Spark branch against spark-thrift (make dbt-spark-build)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
-# Credentials come from .env (created from .env.example by `make up`), local only.
+# Credentials come from .env, local only (not in the repository).
 # =============================================================================
 
 services:

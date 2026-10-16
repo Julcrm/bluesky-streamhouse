@@ -32,9 +32,9 @@ format: check_uv
 
 # --- Local stack (Redpanda, Garage, Postgres) ---
 
-# Creates .env from .env.example on first run (local-only credentials)
+# Needs a .env with the local-only credentials (variables of docker-compose.dev.yaml)
 up:
-	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example")
+	@test -f .env || (echo "Missing .env: local credentials, see docker-compose.dev.yaml" && exit 1)
 	$(COMPOSE_DEV) up -d --wait redpanda redpanda-console garage postgres lakekeeper
 	# One-shot: bootstrap Lakekeeper and create the Iceberg warehouse (idempotent).
 	# Not under --wait, which reports any exited container as a failure
