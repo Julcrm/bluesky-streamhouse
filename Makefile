@@ -1,4 +1,4 @@
-.PHONY: check_uv install add add-dev test lint format up down reset logs ps produce quix spark spark-thrift iceberg-maintenance dbt-spark-build dbt-build dbt-parse dagster clean
+.PHONY: check_uv install add add-dev test lint format up down reset logs ps produce quix spark spark-thrift iceberg-maintenance dbt-spark-build dbt-build dbt-parse dagster api clean
 # Check that uv is available
 UV := $(shell command -v uv 2> /dev/null)
 COMPOSE_DEV := docker compose -f docker-compose.dev.yaml
@@ -92,6 +92,10 @@ dbt-parse: check_uv
 # Dagster UI on localhost:3000 with the DuckDB branch's code location (local stack, .env)
 dagster: check_uv
 	set -a && . ./.env && set +a && uv run dagster dev -m src.dagster.definitions
+
+# Dashboard API on localhost:8000 (API key `local` unless .env sets API_KEY)
+api: check_uv
+	set -a && . ./.env && set +a && API_KEY=$${API_KEY:-local} uv run uvicorn src.serving.api:app --reload --port 8000
 
 clean:
 	rm -rf .venv
