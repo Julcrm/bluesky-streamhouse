@@ -50,6 +50,22 @@ def active_location_runs(
     ]
 
 
+def older_active_location_runs(
+    instance: DagsterInstance, own_run_id: str, job_names: Collection[str] | None
+) -> list[DagsterRun]:
+    """Unfinished runs of this location in `job_names` (any job when None) created before
+    `own_run_id` (lower storage id, Dagster's insertion order)."""
+    own = instance.get_run_record_by_id(own_run_id)
+    return [
+        record.dagster_run
+        for record in instance.get_run_records(RunsFilter(statuses=ACTIVE_RUN_STATUSES))
+        if record.dagster_run.run_id != own_run_id
+        and in_location(record.dagster_run)
+        and (job_names is None or record.dagster_run.job_name in job_names)
+        and (own is None or record.storage_id < own.storage_id)
+    ]
+
+
 def wait_for_runs(
     instance: DagsterInstance,
     log,
@@ -58,18 +74,18 @@ def wait_for_runs(
     timeout_seconds: int,
     poll_seconds: int = 30,
 ) -> None:
-    """Wait until no other unfinished run of this location belongs to `job_names` (any
-    job when None), or fail after `timeout_seconds` without retry.
+    """Wait until no other unfinished run of this location created before this one
+    belongs to `job_names` (any job when None), or fail after `timeout_seconds` without
+    retry.
 
-    Each job waits only for the runs it conflicts with: two jobs waiting for each other
-    would both time out.
+    First come, first served: a run never waits for a later one, so two waiting runs
+    cannot hold each other. They did until the timeout, the hourly compaction (18:50) and
+    the completeness check (19:01) of the Spark branch on 16 and 20/10 (2 h each). A
+    later run does not overtake a waiting one: the schedules skip while any run of the
+    location is unfinished.
     """
     deadline = time.monotonic() + timeout_seconds
-    while active := [
-        run
-        for run in active_location_runs(instance, "", own_run_id)
-        if job_names is None or run.job_name in job_names
-    ]:
+    while active := older_active_location_runs(instance, own_run_id, job_names):
         if time.monotonic() > deadline:
             raise Failure(
                 f"Run {active[0].run_id} ({active[0].job_name}) still in progress after "
