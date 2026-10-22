@@ -51,6 +51,9 @@ MEASURE_TABLES = (
     "service_windows",
     "branch_windows",
     "bench_runs",
+    "catalog_windows",
+    "service_exits",
+    "bucket_samples",
 )
 # Names a reset must never touch, whatever a caller passes
 PROTECTED = ("branch_calendar", "raw_events", config.BENCH_SAMPLE_TOPIC, "default")

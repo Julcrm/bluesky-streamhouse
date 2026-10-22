@@ -112,7 +112,6 @@ def test_collect_once_into_the_benchmark_tables(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(config, "BENCHMARK_DB", test_db)
     monkeypatch.setattr(config, "COLLECTOR_CGROUP_ROOT", str(tmp_path / "cgroup"))
     monkeypatch.setattr(config, "COLLECTOR_PROC_ROOT", str(_proc(tmp_path / "proc")))
-    monkeypatch.setattr(config, "CATALOG_DATABASES", ("postgres",))
     _cgroup(tmp_path / "cgroup", "f" * 64)
     (tmp_path / "cgroup" / "cpu.stat").write_text("usage_usec 555\n")
     conn = collector.connect()
@@ -123,7 +122,8 @@ def test_collect_once_into_the_benchmark_tables(tmp_path, monkeypatch) -> None:
             for statement in collector.DDL:
                 cur.execute(statement)
         now = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
-        assert collector.collect_once(conn, now, {"spark": "f" * 64}) == 3
+        databases = collector.catalog_rows(conn.cursor())
+        assert collector.collect_once(conn, now, {"spark": "f" * 64}) == 2 + len(databases)
         # The same tick twice is ignored (a restart within the interval)
         collector.collect_once(conn, now, {"spark": "f" * 64})
         with conn.cursor() as cur:
@@ -133,8 +133,9 @@ def test_collect_once_into_the_benchmark_tables(tmp_path, monkeypatch) -> None:
             assert cur.fetchall() == [("spark", "spark", "streaming", "f" * 12, 800 * 2**20)]
             cur.execute("SELECT cpu_steal_ticks, cpu_usec FROM host_samples")
             assert cur.fetchall() == [(37, 555)]
+            # Every database, for the catalogs' share of the Postgres active time
             cur.execute("SELECT db FROM catalog_samples")
-            assert cur.fetchall() == [("postgres",)]
+            assert {"postgres", test_db} <= {row[0] for row in cur.fetchall()}
         collector.purge(conn, datetime(2026, 12, 1, tzinfo=UTC))
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM container_samples")

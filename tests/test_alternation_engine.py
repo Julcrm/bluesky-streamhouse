@@ -123,6 +123,7 @@ class _Calendar:
         self.stopped: list[tuple[date, str]] = []
         self.late: list[date] = []
         self.unreachable = False
+        self.connection = _Connection()
 
     def active_for(self, branch: str) -> cal.CalendarDay | None:
         if self.unreachable:
@@ -142,6 +143,29 @@ class _Calendar:
     def mark_late(self, day: date) -> bool:
         self.late.append(day)
         return True
+
+
+class _Connection:
+    """Records the statements of the exits written by the supervisor."""
+
+    def __init__(self) -> None:
+        self.inserted: list[tuple] = []
+        self.down = False
+
+    def cursor(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple | None = None) -> None:
+        if self.down:
+            raise ConnectionError("postgres down")
+        if sql.startswith("INSERT INTO service_exits"):
+            self.inserted.append(params)
 
 
 def _day(status: str = cal.OPEN, branch: str = "duckdb") -> cal.CalendarDay:
@@ -334,3 +358,55 @@ def test_supervisor_loop_writes_its_heartbeat(monkeypatch, tmp_path) -> None:
         for sig, handler in handlers.items():
             signals.signal(sig, handler)
     assert beat.exists()
+
+
+# --- Exits recorded for the windows ---------------------------------------------
+
+
+def test_crashed_service_exit_is_recorded(service) -> None:
+    """18 and 20/10: the Thrift JVM ended on OutOfMemoryError and was restarted in the same
+    container, unseen by the collector; the exit is now written for the windows."""
+    sup, calendar, _ = service
+    calendar.owner_branch = "spark"
+    sup.tick()
+    sup.process.kill()
+    sup.process.wait()
+    sup.tick()
+    [(ts, service_name, branch, code)] = calendar.connection.inserted
+    assert (service_name, branch, code) == ("spark-thrift", "spark", -9)
+    assert ts.tzinfo is not None
+
+
+def test_engine_ending_its_day_is_no_exit_to_record(supervisor) -> None:
+    sup, calendar, _ = supervisor
+    sup.command = [sys.executable, "-c", "pass"]
+    calendar.day = _day()
+    sup.tick()
+    sup.process.wait()
+    sup.tick()
+    assert calendar.connection.inserted == []
+
+
+def test_crashed_engine_exit_is_recorded_under_its_service(supervisor) -> None:
+    sup, calendar, _ = supervisor
+    calendar.day = _day()
+    sup.tick()
+    sup.process.kill()
+    sup.process.wait()
+    sup.tick()
+    assert [row[1:] for row in calendar.connection.inserted] == [("quix", "duckdb", -9)]
+
+
+def test_unrecorded_exit_still_restarts(service) -> None:
+    """The database down at the crash: logged, the service comes back all the same."""
+    sup, calendar, clock = service
+    calendar.owner_branch = "spark"
+    sup.tick()
+    calendar.connection.down = True
+    sup.process.kill()
+    sup.process.wait()
+    sup.tick()
+    calendar.connection.down = False
+    clock["mono"] += 31
+    sup.tick()
+    assert sup.running()

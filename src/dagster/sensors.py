@@ -25,6 +25,7 @@ from src.dagster.alerts import failure_alert_sensor as _failure_alert_sensor
 from src.dagster.alerts import send_email, send_failure_email
 from src.dagster.alternation import calendar_job, completeness_job, completeness_request_b
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
+from src.dagster.storage import bucket_usage_job
 
 __all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_failure_email"]
 
@@ -32,7 +33,14 @@ __all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_
 # still be running) and the completeness check's
 failure_alert_sensor = _failure_alert_sensor(
     "failure_alert_sensor",
-    [silver_gold_job, maintenance_job, nightly_checks_job, calendar_job, completeness_job],
+    [
+        silver_gold_job,
+        maintenance_job,
+        nightly_checks_job,
+        calendar_job,
+        completeness_job,
+        bucket_usage_job,
+    ],
 )
 
 # Alert keys remembered in the cursor (a few days of alerts)
