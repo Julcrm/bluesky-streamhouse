@@ -236,6 +236,11 @@ class CalendarStore:
     def __init__(self, conn) -> None:
         self._conn = conn
 
+    @property
+    def connection(self):
+        """The benchmark database session (the supervisors record exits with it)."""
+        return self._conn
+
     @contextmanager
     def _transaction(self) -> Iterator:
         with self._conn:  # commits, or rolls back on error (autocommit is restored)

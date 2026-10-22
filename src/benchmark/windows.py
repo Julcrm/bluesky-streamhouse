@@ -4,8 +4,12 @@ the collector's raw samples (src/benchmark/collector.py) and the branch's own Br
 
 - service_windows: per window and measured container, CPU time, RAM·time (integral of
   `anon`, trapezoids, like cloud billing), swap·time, memory stall time, major faults and
-  peak real memory. A window where the container restarted (its counters reset) is
-  flagged, and so is one the samples do not cover (collector gap);
+  peak real memory. A window where the container restarted (its counters reset) or where
+  its supervised process exited unexpectedly (service_exits, written by the supervisor) is
+  flagged restarted, and one the samples do not cover (collector gap) has less coverage;
+- catalog_windows: per window and catalog database of the shared Postgres, its share of
+  the active time of every database and the Postgres CPU times that share, an estimate of
+  the catalog's own cost (both branches keep their catalog there);
 - branch_windows: per window, the branch's messages (distinct Kafka offsets of the day,
   first copy), end-to-end latency p50/p95 (processed_at − event_time), collection mix,
   regime (catch-up before the day's caught_up_at, live after), rate bucket, and the host's
@@ -26,6 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 from src import config
 from src.alternation import calendar as cal
+from src.alternation.exits import SERVICE_EXITS_DDL, exits_between
 
 WINDOW = timedelta(seconds=config.BENCHMARK_WINDOW_SECONDS)
 MIB = 2**20
@@ -48,6 +53,22 @@ class Sample:
     swap_bytes: int | None
     pgmajfault: int | None
     mem_psi_full_us: int | None
+
+
+@dataclass(frozen=True)
+class CatalogSample:
+    """pg_stat_database counter of one database (cumulative active time)."""
+
+    ts: datetime
+    db: str
+    active_time_ms: float | None
+
+
+@dataclass(frozen=True)
+class CatalogWindow:
+    active_ms: float
+    share: float
+    cpu_ms_estimate: float | None
 
 
 @dataclass
@@ -78,6 +99,53 @@ def _delta(a: int | None, b: int | None) -> float | None:
     if a is None or b is None or b < a:
         return None
     return float(b - a)
+
+
+def flag_exits(windows: dict[datetime, ServiceWindow], exits: list[datetime]) -> None:
+    """Flag restarted the windows holding an unexpected exit of the service's process: its
+    replacement started cold in the same container, the collector saw nothing."""
+    for ts in exits:
+        start = window_start(ts)
+        if start in windows:
+            windows[start].restarted = True
+
+
+def catalog_windows(
+    samples: list[CatalogSample],
+    postgres_cpu_ms: dict[datetime, float],
+    catalogs: tuple[str, ...] = config.CATALOG_DATABASES,
+    max_gap: timedelta = timedelta(seconds=30),
+) -> dict[tuple[datetime, str], CatalogWindow]:
+    """Each catalog's share of the Postgres active time per window, and the Postgres CPU
+    times that share (None without a Postgres window). Active time is wall time spent in
+    queries, not CPU, and background work (autovacuum, checkpoints) is not attributed: an
+    estimate, reported as such. Deltas are spread over windows like the containers'."""
+    active: dict[datetime, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    by_db: dict[str, list[CatalogSample]] = defaultdict(list)
+    for sample in samples:
+        by_db[sample.db].append(sample)
+    for db, rows in by_db.items():
+        ordered = sorted(rows, key=lambda r: r.ts)
+        for a, b in zip(ordered, ordered[1:], strict=False):
+            if a.active_time_ms is None or b.active_time_ms is None:
+                continue
+            delta = b.active_time_ms - a.active_time_ms
+            if delta < 0 or b.ts <= a.ts or b.ts - a.ts > max_gap:  # reset or gap
+                continue
+            for start, share in _split(a.ts, b.ts):
+                active[start][db] += delta * share
+    result = {}
+    for start, dbs in active.items():
+        total = sum(dbs.values())
+        for db in catalogs:
+            share = dbs.get(db, 0.0) / total if total > 0 else 0.0
+            cpu = postgres_cpu_ms.get(start)
+            result[(start, db)] = CatalogWindow(
+                active_ms=dbs.get(db, 0.0),
+                share=share,
+                cpu_ms_estimate=cpu * share if cpu is not None else None,
+            )
+    return result
 
 
 def service_windows(
@@ -458,8 +526,21 @@ DDL = [
     )""",
     # Added on 2026-10-15 (contamination by the neighbours' CPU)
     "ALTER TABLE branch_windows ADD COLUMN IF NOT EXISTS neighbour_cpu_cores DOUBLE PRECISION",
-    # Ratios per message and layer, only on clean windows (fully sampled, no restart, host
-    # not contaminated): a formula changes here, without recomputing a single window
+    SERVICE_EXITS_DDL,
+    """CREATE TABLE IF NOT EXISTS catalog_windows (
+        day             DATE NOT NULL,
+        window_start    TIMESTAMPTZ NOT NULL,
+        db              TEXT NOT NULL,
+        branch          TEXT,
+        active_ms       DOUBLE PRECISION NOT NULL,
+        active_share    DOUBLE PRECISION NOT NULL,
+        cpu_ms_estimate DOUBLE PRECISION,
+        PRIMARY KEY (window_start, db)
+    )""",
+    # Ratios per message and layer, only on clean windows (fully sampled, host not
+    # contaminated, no restart of any service of the branch in the window: one restarted
+    # service left out alone would understate its layer): a formula changes here, without
+    # recomputing a single window
     f"""CREATE OR REPLACE VIEW benchmark_ratios AS
     SELECT b.day, b.branch, b.window_start, b.regime, b.rate_bucket, b.messages,
            b.latency_p50_ms, b.latency_p95_ms, s.layer,
@@ -470,7 +551,10 @@ DDL = [
            max(s.peak_anon_mib) AS peak_anon_mib
     FROM branch_windows AS b
     JOIN service_windows AS s ON s.window_start = b.window_start AND s.branch = b.branch
-    WHERE NOT b.host_contaminated AND NOT s.restarted
+    WHERE NOT b.host_contaminated
+      AND NOT EXISTS (
+        SELECT 1 FROM service_windows AS r
+        WHERE r.window_start = b.window_start AND r.branch = b.branch AND r.restarted)
       AND s.covered_s >= {config.BENCHMARK_WINDOW_SECONDS} * {config.BENCHMARK_MIN_COVERAGE}
     GROUP BY b.day, b.branch, b.window_start, b.regime, b.rate_bucket, b.messages,
              b.latency_p50_ms, b.latency_p95_ms, s.layer""",
@@ -499,6 +583,7 @@ def rebuild_day(
         for statement in DDL:
             cur.execute(statement)
         cur.execute("DELETE FROM service_windows WHERE day = %s", (day.day,))
+        cur.execute("DELETE FROM catalog_windows WHERE day = %s", (day.day,))
         cur.execute("DELETE FROM branch_windows WHERE day = %s AND branch = %s", (day.day, branch))
         cur.execute(
             "SELECT service, branch, layer, ts, container_id, cpu_usec, anon_bytes, swap_bytes, "
@@ -510,11 +595,17 @@ def rebuild_day(
         for service, sbranch, layer, ts, cid, cpu, anon, swap, faults, psi in cur.fetchall():
             by_service[service].append(Sample(ts, cid, cpu, anon, swap, faults, psi))
             layers[service] = (sbranch, layer)
+        exits = exits_between(cur, start, end)
         service_rows = 0
         sampled_cpu_ms: dict[datetime, float] = defaultdict(float)
+        postgres_cpu_ms: dict[datetime, float] = {}
         for service, samples in by_service.items():
             sbranch, layer = layers[service]
-            for wstart, w in service_windows(samples).items():
+            built = service_windows(samples)
+            flag_exits(built, exits.get(service, []))
+            if service == config.SHARED_POSTGRES_SERVICE:
+                postgres_cpu_ms = {wstart: w.cpu_ms for wstart, w in built.items()}
+            for wstart, w in built.items():
                 if not start <= wstart < end:
                     continue
                 sampled_cpu_ms[wstart] += w.cpu_ms
@@ -538,6 +629,28 @@ def rebuild_day(
                     ),
                 )
                 service_rows += 1
+        cur.execute(
+            "SELECT ts, db, active_time_ms FROM catalog_samples WHERE ts >= %s AND ts < %s",
+            (start, end),
+        )
+        catalogs = catalog_windows([CatalogSample(*row) for row in cur.fetchall()], postgres_cpu_ms)
+        catalog_rows = 0
+        for (wstart, db), c in sorted(catalogs.items()):
+            if not start <= wstart < end:
+                continue
+            cur.execute(
+                "INSERT INTO catalog_windows VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    day.day,
+                    wstart,
+                    db,
+                    config.CATALOG_BRANCHES.get(db),
+                    c.active_ms,
+                    c.share,
+                    c.cpu_ms_estimate,
+                ),
+            )
+            catalog_rows += 1
         cur.execute(
             "SELECT ts, cpu_total_ticks, cpu_steal_ticks, mem_available_bytes, mem_psi_full_us, "
             "cpu_psi_some_us, io_psi_full_us, cpu_usec FROM host_samples "
@@ -575,4 +688,8 @@ def rebuild_day(
                 ),
             )
             branch_rows += 1
-    return {"service_windows": service_rows, "branch_windows": branch_rows}
+    return {
+        "service_windows": service_rows,
+        "branch_windows": branch_rows,
+        "catalog_windows": catalog_rows,
+    }

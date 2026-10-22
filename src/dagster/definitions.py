@@ -39,6 +39,7 @@ from src.dagster.one_off import OneOffRun, one_off_sensor
 from src.dagster.runs import active_location_runs, blocks_schedule
 from src.dagster.sample import benchmark_sample, sample_job, sample_schedule
 from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
+from src.dagster.storage import bucket_usage, bucket_usage_job, bucket_usage_schedule
 
 __all__ = [
     "blocks_schedule",
@@ -162,6 +163,7 @@ defs = Definitions(
         ducklake_day_completeness,
         duckdb_benchmark_windows,
         benchmark_sample,
+        bucket_usage,
     ],
     jobs=[
         silver_gold_job,
@@ -171,6 +173,7 @@ defs = Definitions(
         completeness_job,
         sample_job,
         duckdb_bench_job,
+        bucket_usage_job,
     ],
     schedules=[
         silver_gold_schedule,
@@ -180,6 +183,7 @@ defs = Definitions(
         close_day_schedule,
         sample_schedule,
         duckdb_bench_schedule,
+        bucket_usage_schedule,
     ],
     sensors=[
         failure_alert_sensor,

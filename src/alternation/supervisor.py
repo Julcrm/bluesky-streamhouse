@@ -48,6 +48,7 @@ from loguru import logger
 from src import config
 from src.alternation import calendar as cal
 from src.alternation.engine import DAY_ENV
+from src.alternation.exits import record_exit
 from src.benchmark import runs as bench_runs
 from src.healthcheck import touch
 
@@ -57,6 +58,10 @@ STOP_TIMEOUT_SECONDS = 25
 
 class Supervisor:
     """Starts and stops one engine according to the calendar."""
+
+    # Supervises a service of the branch rather than its engine (ServiceSupervisor)
+    service_mode = False
+    kind = "Engine"
 
     def __init__(
         self,
@@ -118,6 +123,25 @@ class Supervisor:
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
+    def _check_exit(self) -> None:
+        """Notice that the process ended by itself; record it unless it succeeded (an engine
+        ends its day with 0): the next start happens in the same container, unseen by the
+        collector, so the windows are flagged from service_exits."""
+        if self.process is None or self.running():
+            return
+        code = self.process.returncode
+        logger.warning(f"{self.kind} exited with code {code}")
+        self.process = None
+        self._exited_at = self._monotonic()
+        service = config.SUPERVISED_SERVICES.get((self.branch, self.service_mode))
+        if code == 0 or service is None:
+            return
+        try:
+            record_exit(self._calendar().connection, self._now(), service, self.branch, code)
+        except Exception as e:  # noqa: BLE001 - a missed record must not stop the restart
+            self._store = None
+            logger.warning(f"Exit of {service} not recorded ({e})")
+
     def start(self, day: cal.CalendarDay) -> None:
         logger.info(f"Starting the branch {self.branch} engine for day {day.day}")
         env = {**os.environ, DAY_ENV: day.day.isoformat()}
@@ -151,10 +175,7 @@ class Supervisor:
 
     def tick(self) -> None:
         """One look at the calendar and the engine."""
-        if self.process is not None and not self.running():
-            logger.warning(f"Engine exited with code {self.process.returncode}")
-            self.process = None
-            self._exited_at = self._monotonic()
+        self._check_exit()
         try:
             day = self._read()
         except Exception as e:  # noqa: BLE001 - keep the current state, retry next tick
@@ -224,15 +245,15 @@ class Supervisor:
 class ServiceSupervisor(Supervisor):
     """Runs a service of the branch while the branch owns the latest opened day."""
 
+    service_mode = True
+    kind = "Service"
+
     def start(self, day: cal.CalendarDay | None = None) -> None:
         logger.info(f"Branch {self.branch} owns the latest opened day: starting the service")
         self.process = subprocess.Popen(self.command)
 
     def tick(self) -> None:
-        if self.process is not None and not self.running():
-            logger.warning(f"Service exited with code {self.process.returncode}")
-            self.process = None
-            self._exited_at = self._monotonic()
+        self._check_exit()
         try:
             owner = self._calendar().owner()
         except Exception as e:  # noqa: BLE001 - keep the current state, retry next tick
