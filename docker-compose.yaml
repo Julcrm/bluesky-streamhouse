@@ -376,8 +376,12 @@ services:
       # heap in 1.75 GB was OOM-killed on 2026-10-07)
       - SPARK_THRIFT_DRIVER_MEMORY=1024m
       # Code cache 128 MB: 64 MB ran out on 2026-10-18 ("Out of space in CodeCache for
-      # adapters"), Iceberg's SparkProcedures could no longer load until the JVM restarted
-      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=128m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+      # adapters"), Iceberg's SparkProcedures could no longer load until the JVM restarted.
+      # Diagnostics only (no effect on the measures): the heap dumped at an OutOfMemoryError
+      # (heap exhausted on 18 and 20/10 during the Silver-vs-Bronze test, before its rewrite
+      # of 22/10), one file at a fixed path so later ones are refused (~1 GB at most, until
+      # the container is recreated), and a GC log capped at 5 x 10 MB
+      - SPARK_DRIVER_JAVA_OPTIONS=-XX:+UseSerialGC -XX:ReservedCodeCacheSize=128m -XX:MaxDirectMemorySize=64m -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/thrift-oom.hprof -Xlog:gc*:file=/tmp/thrift-gc.log:time,uptime,level,tags:filecount=5,filesize=10m
       - MALLOC_ARENA_MAX=2
     stop_grace_period: 30s
     # Heartbeat written at each loop (src/healthcheck.py): stale after 4 loops of 30 s
