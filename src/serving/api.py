@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from typing import Any
 
+import psycopg2.errors
 import requests
 from fastapi import Depends, FastAPI, HTTPException, Query, Security, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,11 +71,16 @@ def cached(seconds: int) -> Callable:
 
 
 def query(sql: str, params: tuple = ()) -> list[dict]:
-    """Rows of the benchmark database as dicts (a short session per call)."""
+    """Rows of the benchmark database as dicts (a short session per call). A table not
+    created yet (bucket_samples before its first night, windows before a first close, a
+    database just reset) gives no rows, not an error."""
     conn = cal.connect_benchmark()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            try:
+                cur.execute(sql, params)
+            except psycopg2.errors.UndefinedTable:
+                return []
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
     finally:

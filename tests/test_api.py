@@ -172,3 +172,21 @@ def test_frozen_sql_runs_on_the_benchmark_schema(monkeypatch) -> None:
     ):
         assert api.query(sql, (7,)) == []
     assert api.query(api.CALENDAR_SQL) == []
+
+
+def test_a_table_not_created_yet_gives_no_rows(monkeypatch) -> None:
+    """bucket_samples only exists after its first night: /storage answers empty, not 500."""
+    from tests.test_resources_ducklake import _local_stack_up
+
+    if not _local_stack_up():
+        pytest.skip("local stack not running (make up)")
+    test_db = "bluesky_benchmark_api_empty"
+    admin = cal.connect_benchmark("postgres")
+    with admin.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (test_db,))
+        if cur.fetchone() is None:
+            cur.execute(f"CREATE DATABASE {test_db}")
+    admin.close()
+    monkeypatch.setattr(config, "BENCHMARK_DB", test_db)
+    assert api.query(api.STORAGE_SQL, (30,)) == []
+    assert api.query(api.COMPARE_SQL, (7,)) == []
