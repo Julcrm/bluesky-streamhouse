@@ -17,10 +17,10 @@ Security: X-API-Key header on the data endpoints, as velib's API.
 
 import secrets
 import time
-from decimal import Decimal
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from functools import wraps
 from typing import Any
 
