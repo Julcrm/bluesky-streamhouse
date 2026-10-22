@@ -267,6 +267,9 @@ SUPERVISED_SERVICES = {
 # when the day's copies still wait for expiration
 BUCKET_USAGE_CRON = "50 1 * * *"
 BUCKET_USAGE_BRANCHES = {"ducklake": "duckdb", "iceberg": "spark"}
+# Table usage (H5: bytes per row after compaction), once a night after the maintenances
+# (02:00 DuckLake, 02:30 Iceberg) and the nightly checks (03:00): table_samples
+TABLE_USAGE_CRON = "0 4 * * *"
 
 # --- Serving API of the portfolio dashboard (phase 8, src/serving/api.py) ---
 # Read only: the benchmark database, Redpanda's offsets and Dagster, never the lakehouses

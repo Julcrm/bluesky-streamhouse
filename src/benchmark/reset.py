@@ -54,6 +54,8 @@ MEASURE_TABLES = (
     "catalog_windows",
     "service_exits",
     "bucket_samples",
+    "table_samples",
+    "transform_passes",
 )
 # Names a reset must never touch, whatever a caller passes
 PROTECTED = ("branch_calendar", "raw_events", config.BENCH_SAMPLE_TOPIC, "default")
@@ -151,41 +153,22 @@ def reset_ducklake(
 
 def _catalog() -> tuple[str, Any]:
     """(base URL of the warehouse's REST paths, HTTP session)."""
-    import requests
+    from src.resources import iceberg_rest
 
-    session = requests.Session()
-    base = config.ICEBERG_CATALOG_URI.rstrip("/")
-    response = session.get(
-        f"{base}/v1/config", params={"warehouse": config.ICEBERG_WAREHOUSE}, timeout=30
-    )
-    response.raise_for_status()
-    body = response.json()
-    # The warehouse prefix: in `defaults` for Lakekeeper, `overrides` win when set
-    prefix = {**body.get("defaults", {}), **body.get("overrides", {})}["prefix"]
-    return f"{base}/v1/{prefix}", session
+    return iceberg_rest.catalog()
 
 
 def iceberg_tables(namespaces: tuple[str, ...] = ICEBERG_NAMESPACES) -> list[tuple[str, str]]:
     """(namespace, table) of every table in the namespaces (missing namespaces skipped)."""
+    from src.resources import iceberg_rest
+
     _guard(namespaces)
     url, session = _catalog()
-    tables = []
-    for namespace in namespaces:
-        token = None
-        while True:  # paged (rest-page-size)
-            params = {"pageToken": token} if token else {}
-            response = session.get(
-                f"{url}/namespaces/{namespace}/tables", params=params, timeout=30
-            )
-            if response.status_code == 404:
-                break
-            response.raise_for_status()
-            body = response.json()
-            tables += [(namespace, ident["name"]) for ident in body.get("identifiers", [])]
-            token = body.get("next-page-token")
-            if not token:
-                break
-    return tables
+    return [
+        (namespace, table)
+        for namespace in namespaces
+        for table in iceberg_rest.list_tables(url, session, namespace)
+    ]
 
 
 def reset_iceberg(namespaces: tuple[str, ...] = ICEBERG_NAMESPACES) -> list[str]:
