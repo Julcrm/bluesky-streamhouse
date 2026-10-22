@@ -27,3 +27,4 @@ dbt/*/.user.yml
 
 # dagster CLI temporary instance
 .tmp_dagster_home_*/
+.env.example
