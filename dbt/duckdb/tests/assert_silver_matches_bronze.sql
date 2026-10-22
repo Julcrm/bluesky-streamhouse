@@ -7,6 +7,12 @@
 -- in the window while its first copy (the one Silver kept) is older, and counts would
 -- differ for nothing. A seq is looked up in the other layer by its event_time range,
 -- which every copy of an event shares (and which prunes the day-split files)
+--
+-- Same logic as dbt/spark since 2026-10-16: Bronze and Silver are each read once per
+-- model, as the union of both checks' rows, and compared in one full outer join
+-- (missing = in Bronze's window, absent from Silver; extra = in Silver's window, absent
+-- from Bronze). Reading more rows than each check needs cannot hide a problem: they are
+-- real rows of the same layer and snapshot
 
 {{ config(meta={'dagster': {'ref': {'name': 'silver_posts'}}}) }}
 
@@ -18,6 +24,7 @@
     ('silver_deletes', "operation = 'delete'"),
 ] %}
 {%- set bronze = source('bronze', 'bronze_events') %}
+{%- set since = "now() - " ~ var('test_window') %}
 
 WITH
 {%- for model, bronze_filter in models %}
@@ -31,49 +38,57 @@ WITH
     ).columns[0].values()[0] %}
 {%- endif %}
 
+{{ model }}_silver_window AS (
+    SELECT min(event_time) AS lower, max(event_time) AS upper
+    FROM {{ ref(model) }}
+    WHERE processed_at >= {{ since }}
+),
+
 {{ model }}_bronze AS (
-    SELECT seq, min(event_time) AS event_time
+    SELECT
+        seq,
+        bool_or(processed_at >= {{ since }}) AS in_window,
+        min(event_time) FILTER (WHERE processed_at >= {{ since }}) AS window_event_time
     FROM {{ bronze }} AT (VERSION => {{ read_up_to }})
     WHERE {{ bronze_filter }}
-      AND processed_at >= now() - {{ var('test_window') }}
+      AND (processed_at >= {{ since }}
+           OR event_time BETWEEN (SELECT lower FROM {{ model }}_silver_window)
+                             AND (SELECT upper FROM {{ model }}_silver_window))
     GROUP BY seq
 ),
 
 {{ model }}_silver AS (
-    SELECT seq, event_time
+    SELECT seq, bool_or(processed_at >= {{ since }}) AS in_window
     FROM {{ ref(model) }}
-    WHERE processed_at >= now() - {{ var('test_window') }}
+    WHERE processed_at >= {{ since }}
+       OR event_time BETWEEN (SELECT min(window_event_time) FROM {{ model }}_bronze)
+                         AND (SELECT max(window_event_time) FROM {{ model }}_bronze)
+    GROUP BY seq
 ),
 
-{{ model }}_missing AS (
-    SELECT count(*) AS events
-    FROM {{ model }}_bronze
-    WHERE seq NOT IN (
-        SELECT seq
-        FROM {{ ref(model) }}
-        WHERE event_time BETWEEN (SELECT min(event_time) FROM {{ model }}_bronze)
-                             AND (SELECT max(event_time) FROM {{ model }}_bronze)
-    )
-),
-
-{{ model }}_extra AS (
-    SELECT count(*) AS events
-    FROM {{ model }}_silver
-    WHERE seq NOT IN (
-        SELECT seq
-        FROM {{ bronze }} AT (VERSION => {{ read_up_to }})
-        WHERE {{ bronze_filter }}
-          AND event_time BETWEEN (SELECT min(event_time) FROM {{ model }}_silver)
-                             AND (SELECT max(event_time) FROM {{ model }}_silver)
-    )
+{{ model }}_check AS (
+    SELECT
+        count(*) FILTER (WHERE b.in_window AND s.seq IS NULL) AS missing,
+        count(*) FILTER (WHERE s.in_window AND b.seq IS NULL) AS extra
+    FROM {{ model }}_bronze AS b
+    FULL OUTER JOIN {{ model }}_silver AS s ON b.seq = s.seq
 ){{ "," if not loop.last }}
 {%- endfor %}
 
-{% for model, _ in models %}
-SELECT '{{ model }}' AS model, 'missing from Silver' AS problem, events
-FROM {{ model }}_missing WHERE events > 0
-UNION ALL
-SELECT '{{ model }}', 'absent from Bronze', events
-FROM {{ model }}_extra WHERE events > 0
-{% if not loop.last %}UNION ALL{% endif %}
-{%- endfor %}
+{#- Each check is referenced once (Spark inlines a CTE at every reference: two
+    references would read Bronze twice) and turned into one row per problem -#}
+SELECT model, problem, events
+FROM (
+    SELECT
+        checks.model,
+        problems.problem,
+        CASE problems.problem WHEN 'missing from Silver' THEN checks.missing ELSE checks.extra END AS events
+    FROM (
+        {%- for model, _ in models %}
+        SELECT '{{ model }}' AS model, missing, extra FROM {{ model }}_check
+        {% if not loop.last %}UNION ALL{% endif %}
+        {%- endfor %}
+    ) AS checks
+    CROSS JOIN (VALUES ('missing from Silver'), ('absent from Bronze')) AS problems (problem)
+) AS results
+WHERE events > 0
