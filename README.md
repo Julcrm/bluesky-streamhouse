@@ -1,8 +1,8 @@
 # Bluesky Streamhouse
 
-A streaming lakehouse benchmark deployed on a single VPS: the live Bluesky firehose goes through two complete pipelines, one built on DuckDB and DuckLake, the other on Spark and Iceberg, with the same data contract, the same tests and the same resource budget.
+A streaming lakehouse deployed on a VPS — the live Bluesky firehose ingested through Redpanda into two pipelines, one on DuckDB and DuckLake, the other on Spark and Iceberg, with the same Bronze / Silver / Gold models and tests.
 
-**The question:** on one small node, at real traffic (~200-600 messages/s), what does Spark cost compared with a single-node engine, and from which load would it pay off?
+**Project page** → [julien-castellano.fr/projets/bluesky-streamhouse](https://julien-castellano.fr/projets/bluesky-streamhouse)
 
 ## Architecture
 
@@ -11,7 +11,7 @@ Bluesky Jetstream (WebSocket)
         ↓
 Redpanda — raw_events topic, shared by both branches
         ↓
-one branch per day, 07:00-19:00, alternating
+one branch per day, alternating
         ↓                                        ↓
 DuckDB branch                                    Spark branch
         ↓                                        ↓
@@ -20,25 +20,9 @@ Bronze — Quix Streams → DuckLake                 Bronze — Spark Structured
 Silver — dbt + DuckDB                            Silver — dbt + Spark (Thrift server)
         ↓                                        ↓
 Gold   — dbt + DuckDB                            Gold   — dbt + Spark (Thrift server)
-        ↓                                        ↓
-        └──────── same contract, same tests, Gold parity checked ────────┘
 ```
 
-Data files of both branches on Garage (S3-compatible); catalogs in Postgres (DuckLake) and Lakekeeper (Iceberg REST). Every container is measured by `bench-collector` (cgroup samples every 10 s).
-
-Orchestrated by **Dagster**, one code location per branch: Silver/Gold every 15 minutes during the branch's day, nightly maintenance and tests, and a weekly controlled test.
-
-## How the benchmark stays fair
-
-| Rule | How |
-|---|---|
-| Same data | Both branches read the same Redpanda topic; each day goes to one branch, and a frozen 20-minute sample is replayed through both every week (1×, 4×, max) |
-| Same contract | Bronze columns, deduplication on `seq`, Silver/Gold models and dbt tests are identical; a parity test compares the Gold tables row by row |
-| Same budget | Memory limits, 2 threads (DuckDB) against 2 cores (`local[2]`) for the transformation; limits are reported as context, the result is the measured consumption |
-| No tuning during the run | Hypotheses, thresholds, code and settings are frozen by a dated commit before the 14-day measurement period; any fix restarts it |
-| Clean measures | Per-message ratios by traffic level, windows flagged when a neighbour on the VPS uses the CPU or memory runs low |
-
-Both stacks are tuned seriously (shuffle partitions, heap sizes, compaction, catalog settings): Spark is not a straw man.
+Data files on Garage (S3-compatible); catalogs in Postgres (DuckLake) and Lakekeeper (Iceberg REST). Orchestrated by **Dagster**, one code location per branch: Silver/Gold every 15 minutes, nightly maintenance and tests.
 
 ## Stack
 
@@ -46,14 +30,14 @@ Both stacks are tuned seriously (shuffle partitions, heap sizes, compaction, cat
 |---|---|---|
 | Streaming | Quix Streams | Spark Structured Streaming |
 | Table format | DuckLake | Apache Iceberg |
-| Catalog | Postgres (DuckLake metadata) | Lakekeeper (Iceberg REST) |
+| Catalog | Postgres | Lakekeeper (Iceberg REST) |
 | Transformation | dbt-duckdb | dbt-spark via Spark Thrift server |
 
 | Shared | Tool |
 |---|---|
 | Source | Bluesky Jetstream |
 | Message broker | Redpanda |
-| Object storage | Garage (S3-compatible) |
+| Storage | Garage (S3-compatible) |
 | Orchestration | Dagster |
 | Metrics | cgroups v2 collector, Postgres |
 | Packaging | uv |
@@ -63,7 +47,7 @@ Both stacks are tuned seriously (shuffle partitions, heap sizes, compaction, cat
 
 ```
 src/
-├── config.py                   # Centralized settings (one place for every benchmark parameter)
+├── config.py                   # Centralized settings
 ├── ingestion/
 │   └── producer.py             # Jetstream → Redpanda raw_events
 ├── processing/
@@ -73,7 +57,7 @@ src/
 │       ├── stream_job.py       # Spark branch: Structured Streaming → Iceberg Bronze
 │       └── thrift_server.py    # Spark Thrift server, the engine of dbt-spark
 ├── alternation/                # Daily calendar, engine supervisor, day completeness
-├── benchmark/                  # Collector, windows, frozen sample, replay, controlled test, parity
+├── benchmark/                  # Metrics collector, replay, parity, reset
 ├── maintenance/
 │   ├── ducklake.py             # Retention, CHECKPOINT
 │   └── iceberg.py              # Retention, compaction, snapshot expiry, orphan files
@@ -94,20 +78,25 @@ docker/
 ├── producer/  quix/  spark/    # Streaming services
 ├── dagster/  dagster-spark/    # Dagster code servers (gRPC, port 4000), Spark Thrift server
 ├── lakekeeper/                 # Iceberg catalog setup (warehouse on Garage)
-└── collector/                  # Benchmark metrics collector
+├── postgres/                   # Local databases (init.sql)
+└── collector/                  # Metrics collector
 ```
 
 ## Local development
 
+`make up` needs a `.env` with the local credentials read by `docker-compose.dev.yaml`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `BUCKET`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DUCKLAKE_CATALOG_DB`, `GARAGE_RPC_SECRET`, `LAKEKEEPER_ENCRYPTION_KEY`, `REDPANDA_CONSOLE_PORT`.
+
 ```bash
-make install        # uv sync --all-groups
-make up             # Redpanda, Garage, Postgres, Lakekeeper
-make produce        # Jetstream → Redpanda
-make quix           # DuckDB branch streaming
-make spark          # Spark branch streaming (container)
-make spark-thrift   # Spark Thrift server on localhost:10000
-make dbt-build      # DuckDB branch Silver/Gold
-make dbt-spark-build
+make install              # uv sync --all-groups
+make up                   # Redpanda, Garage, Postgres, Lakekeeper
+make produce              # Jetstream → Redpanda
+make quix                 # DuckDB branch streaming
+make spark                # Spark branch streaming (container)
+make spark-thrift         # Spark Thrift server on localhost:10000
+make dbt-build            # DuckDB branch Silver/Gold
+make dbt-spark-build      # Spark branch Silver/Gold
+make iceberg-maintenance  # Iceberg maintenance, once
+make dagster              # Dagster UI (DuckDB branch code location)
 ```
 
 ## Tests
@@ -142,8 +131,4 @@ The `deploy` job (Coolify webhook) only triggers on push to `main` and is gated 
 
 ## Deployment
 
-Deployed on a VPS (4 vCPU, 8 GB) via Coolify, with automatic deployment on push to `main`. The VPS is shared with other projects: their CPU use is measured, and windows where it is too high are excluded.
-
-## Status
-
-Measurement period: **22 October → 4 November 2026** (7 days per branch). Results, raw data and analysis scripts will be published here, whatever they show, along with the limits of a single-node benchmark.
+Deployed on a VPS via Coolify with automatic deployment on push to `main` (GitHub Actions).
