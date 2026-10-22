@@ -16,7 +16,7 @@
 #   - dbt-spark:        dbt build of the Spark branch against spark-thrift (make dbt-spark-build)
 # Usage: make up / make down / make logs
 # All ports are bound to 127.0.0.1: nothing is reachable from the local network.
-# Credentials come from .env (created from .env.example by `make up`), local only.
+# Credentials come from .env, local only (not in the repository).
 # =============================================================================
 
 services:
@@ -241,8 +241,10 @@ services:
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       SPARK_THRIFT_DRIVER_MEMORY: 1024m
       SPARK_DRIVER_JAVA_OPTIONS: >-
-        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=128m -XX:MaxDirectMemorySize=64m
         -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+        -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/thrift-oom.hprof
+        -Xlog:gc*:file=/tmp/thrift-gc.log:time,uptime,level,tags:filecount=5,filesize=10m
       MALLOC_ARENA_MAX: "2"
     ports:
       - "127.0.0.1:10000:10000"

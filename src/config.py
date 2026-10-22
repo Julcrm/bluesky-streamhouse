@@ -276,43 +276,13 @@ BENCH_SAMPLE_CRON = "0 21 9 10 *"
 # it has served. Launched only within the grace period after its time, never later
 ONE_OFF_GRACE_HOURS = 12
 ONE_OFF_SENSOR_SECONDS = 60
-# Windows of the Spark day 12/10, not built at its close (Thrift down at 19:01): only on
-# a Spark day (Thrift JVM up), after that day's own windows (19:00), and before the
-# Iceberg maintenance of 19/10 02:30 cuts that day (7-day retention on event_time; the
-# day starts at 11/10 19:00). Sunday is a fallback, harmless if Friday worked (rebuilt)
-_SPARK_WINDOWS_1210 = {
-    "ops": {
-        "bluesky__spark__alternation__iceberg_day_completeness": {"config": {"day": "2026-10-12"}},
-        "bluesky__spark__benchmark__spark_benchmark_windows": {"config": {"day": "2026-10-12"}},
-    }
-}
 ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
-    (
-        "spark-windows-2026-10-12-fri",
-        "bluesky_iceberg_day_completeness",
-        "2026-10-16T19:20:00+02:00",
-        _SPARK_WINDOWS_1210,
-    ),
-    (
-        "spark-windows-2026-10-12-sun",
-        "bluesky_iceberg_day_completeness",
-        "2026-10-18T19:20:00+02:00",
-        _SPARK_WINDOWS_1210,
-    ),
-    # First controlled-test night in prod (plan A of Julien, 15/10): after the Spark day
-    # of 18/10, ahead of the scheduled Tuesday night, which becomes a second measure
-    ("bench-spark-night-2026-10-18", "bluesky_spark_bench_night", "2026-10-18T20:00:00+02:00", {}),
+    # Spark controlled-test night on the Spark day of 22/10, ahead of the scheduled
+    # Monday 26/10: those of 18 and 20/10 ran no run (bluesky-spark could not reach
+    # Redpanda, then waited 2 h for the completeness check), both fixed on 22/10
+    ("bench-spark-night-2026-10-22", "bluesky_spark_bench_night", "2026-10-22T20:00:00+02:00", {}),
 )
-ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = (
-    # First controlled-test night in prod (plan A of Julien, 15/10): after the DuckDB day
-    # of 17/10, ahead of the scheduled Monday night, which becomes a second measure
-    (
-        "bench-duckdb-night-2026-10-17",
-        "bluesky_duckdb_bench_night",
-        "2026-10-17T20:00:00+02:00",
-        {},
-    ),
-)
+ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = ()
 
 # --- Controlled test: "bench" mode of the engines (decision D36) ---
 # The supervisor starts its engine with BENCH_RUN=<run id> for a requested run of
