@@ -251,16 +251,15 @@ def neighbour_cpu_cores(window: HostWindow | None, sampled_cpu_ms: float) -> flo
 
 
 def host_contaminated(window: HostWindow | None, neighbour_cores: float | None = None) -> bool:
-    """A window the neighbours may have biased (thresholds provisional until the freeze):
-    the hypervisor's other tenants (steal), the VPS's other projects (their CPU, or the
-    memory left). The host's PSI is no flag: it mostly measures the branch itself."""
+    """A window the neighbours may have biased: the hypervisor's other tenants (steal), the
+    VPS's other projects (their CPU). The host's PSI and available memory are no flags:
+    they mostly measure the branch itself, and would drop the heavier branch's heaviest
+    windows (see config)."""
     if window is None:
         return True  # no host data: cannot be vouched for
     steal = window.steal_pct or 0.0
-    return (
-        steal > config.HOST_STEAL_PCT_MAX
-        or (neighbour_cores or 0.0) > config.HOST_NEIGHBOUR_CPU_CORES_MAX
-        or (window.min_available_mib or 0.0) < config.HOST_MIN_AVAILABLE_MIB
+    return steal > config.HOST_STEAL_PCT_MAX or (
+        (neighbour_cores or 0.0) > config.HOST_NEIGHBOUR_CPU_CORES_MAX
     )
 
 

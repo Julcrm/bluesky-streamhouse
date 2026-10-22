@@ -287,15 +287,17 @@ BENCHMARK_WINDOW_SECONDS = 300
 BENCHMARK_MIN_COVERAGE = 0.9
 # Traffic levels to compare the branches at equal throughput (msg/s, upper bound, label)
 BENCHMARK_RATE_BUCKETS = ((200, "0-200"), (500, "200-500"), (float("inf"), "500+"))
-# Host health flags (D32), provisional until the protocol freeze: a window is
-# contaminated above 5 % CPU steal, above 0.5 core used by the neighbours on average
-# (host CPU minus every sampled container), or below 512 MiB of available memory. The
-# host's PSI is no flag: it mostly measures the branch itself (15/10: CPU stall ~65 s per
-# window on Spark days against ~17 s on DuckDB days, neighbours ~0.15 core); it stays
-# stored as context
+# Host health flags (D32), frozen with the protocol: a window is contaminated above 5 % CPU
+# steal or above 0.5 core used by the neighbours on average (host CPU minus every sampled
+# container). Neither the host's PSI nor its available memory is a flag: both mostly
+# measure the branch itself (15/10: CPU stall ~65 s per window on Spark days against ~17 s
+# on DuckDB days; 15-21/10: available memory down to 659 MiB on Spark days, never below
+# 2 153 MiB on DuckDB days), so a flag on them would drop the heaviest windows of the
+# heavier branch (decision of Julien on 2026-10-22). The neighbours cannot take a branch's
+# memory any more (their limits and the branches' memory.low, D32); a branch's own memory
+# pressure is a result, measured per service. Both stay stored as context
 HOST_STEAL_PCT_MAX = 5.0
 HOST_NEIGHBOUR_CPU_CORES_MAX = 0.5
-HOST_MIN_AVAILABLE_MIB = 512.0
 
 # --- Frozen sample of the controlled test (phase 7, decision D35) ---
 # ~20 min of raw_events copied once into a topic kept forever, never modified: the
