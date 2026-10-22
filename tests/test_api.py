@@ -195,3 +195,13 @@ def test_a_table_not_created_yet_gives_no_rows(monkeypatch) -> None:
     monkeypatch.setattr(config, "BENCHMARK_DB", test_db)
     assert api.query(api.STORAGE_SQL, (30,)) == []
     assert api.query(api.COMPARE_SQL, (7,)) == []
+
+
+def test_postgres_decimals_are_numbers() -> None:
+    """Sums came back as strings in prod ("messages": "39500000", 22/10)."""
+    from decimal import Decimal
+
+    assert api._number(Decimal("39500000")) == 39_500_000
+    assert isinstance(api._number(Decimal("39500000")), int)
+    assert api._number(Decimal("0.25")) == 0.25
+    assert api._number("spark") == "spark"

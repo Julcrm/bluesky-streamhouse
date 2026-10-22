@@ -17,6 +17,7 @@ Security: X-API-Key header on the data endpoints, as velib's API.
 
 import secrets
 import time
+from decimal import Decimal
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -83,9 +84,19 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
             except psycopg2.errors.UndefinedTable:
                 return []
             columns = [c.name for c in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [
+                {c: _number(v) for c, v in zip(columns, row, strict=True)} for row in cur.fetchall()
+            ]
     finally:
         conn.close()
+
+
+def _number(value: Any) -> Any:
+    """Postgres sums and averages come back as Decimal, which FastAPI serializes as a
+    string ("39500000"): numbers for the dashboard."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    return value
 
 
 def dagster(graphql: str) -> dict:
