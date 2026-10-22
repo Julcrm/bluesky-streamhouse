@@ -50,6 +50,46 @@ def test_restart_is_flagged_and_not_counted() -> None:
     assert windows[T0].restarted and windows[T0].cpu_ms == 0
 
 
+def test_exit_of_the_supervised_process_flags_its_window() -> None:
+    """The JVM restarted inside the container: same container id, counters going on."""
+    windows = w.service_windows([_s(t, t * 100_000, 100) for t in range(0, 460, 10)])
+    w.flag_exits(windows, [T0 + timedelta(seconds=320), T0 + timedelta(hours=5)])
+    assert [windows[k].restarted for k in sorted(windows)] == [False, True]
+
+
+def _c(seconds: int, db: str, active_ms: float | None) -> w.CatalogSample:
+    return w.CatalogSample(T0 + timedelta(seconds=seconds), db, active_ms)
+
+
+def test_catalog_share_of_the_postgres_active_time_and_cpu() -> None:
+    """Over one window: ducklake_catalog 30 ms active, iceberg_catalog 10, velib 60: shares
+    of 30 % and 10 % of the Postgres CPU (2 s)."""
+    samples = [
+        *(_c(t, "ducklake_catalog", v) for t, v in ((0, 0), (10, 30))),
+        *(_c(t, "iceberg_catalog", v) for t, v in ((0, 100), (10, 110))),
+        *(_c(t, "velib", v) for t, v in ((0, 5), (10, 65))),
+    ]
+    found = w.catalog_windows(samples, {T0: 2000.0})
+    duck, ice = found[(T0, "ducklake_catalog")], found[(T0, "iceberg_catalog")]
+    assert (duck.active_ms, duck.share, duck.cpu_ms_estimate) == pytest.approx((30, 0.3, 600))
+    assert (ice.share, ice.cpu_ms_estimate) == pytest.approx((0.1, 200))
+    assert (T0, "velib") not in found  # only the catalogs are kept
+
+
+def test_catalog_counters_reset_or_gap_are_skipped() -> None:
+    samples = [
+        _c(0, "ducklake_catalog", 500),
+        _c(10, "ducklake_catalog", 20),  # Postgres restarted: counters reset
+        _c(20, "ducklake_catalog", 40),
+        _c(200, "ducklake_catalog", 90),  # collector gap
+        _c(0, "velib", 0),
+        _c(20, "velib", 20),
+    ]
+    found = w.catalog_windows(samples, {})
+    assert found[(T0, "ducklake_catalog")].active_ms == pytest.approx(20)
+    assert found[(T0, "ducklake_catalog")].cpu_ms_estimate is None  # no Postgres window
+
+
 def test_collector_gap_lowers_coverage() -> None:
     windows = w.service_windows([_s(0, 0, 100), _s(10, 0, 100), _s(120, 0, 100)])
     assert windows[T0].covered_s == pytest.approx(10)
@@ -234,7 +274,9 @@ def test_offset_chunks_cover_the_day_once() -> None:
 
 def test_ratio_view_only_uses_clean_windows() -> None:
     view = w.DDL[-1]
-    assert "NOT b.host_contaminated AND NOT s.restarted" in view
+    assert "NOT b.host_contaminated" in view
+    # A restart of any service of the branch drops the whole window, not that service alone
+    assert "r.branch = b.branch AND r.restarted" in view
     assert f"{config.BENCHMARK_WINDOW_SECONDS} * {config.BENCHMARK_MIN_COVERAGE}" in view
 
 
@@ -265,6 +307,8 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
                 "catalog_samples",
                 "service_windows",
                 "branch_windows",
+                "catalog_windows",
+                "service_exits",
             ):
                 cur.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in collector.DDL:
@@ -276,10 +320,26 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
                     "'c1', %s, %s, 0, 0, 0, 0, 0, 0)",
                     (ts, i * 1_000_000, 500 * MIB),
                 )
-                # Host: the container's CPU second plus 0.2 s of the neighbours per tick
+                # Host: the container's CPU second, the Postgres 0.1 s and 0.2 s of the
+                # neighbours per tick
                 cur.execute(
                     "INSERT INTO host_samples VALUES (%s, %s, %s, %s, 0, 0, 0, 0, %s)",
-                    (ts, i * 100, 0, 4096 * MIB, i * 1_200_000),
+                    (ts, i * 100, 0, 4096 * MIB, i * 1_300_000),
+                )
+                # The shared Postgres (0.1 s per tick, sampled: not a neighbour) and two
+                # databases, a quarter of its active time for the DuckLake catalog
+                cur.execute(
+                    "INSERT INTO container_samples VALUES (%s, %s, NULL, 'shared', 'p1', %s, "
+                    "%s, 0, 0, 0, 0, 0, 0)",
+                    (ts, config.SHARED_POSTGRES_SERVICE, i * 100_000, 100 * MIB),
+                )
+                cur.execute(
+                    "INSERT INTO catalog_samples VALUES (%s, 'ducklake_catalog', 0, 0, 0, 0, %s)",
+                    (ts, i * 10.0),
+                )
+                cur.execute(
+                    "INSERT INTO catalog_samples VALUES (%s, 'velib', 0, 0, 0, 0, %s)",
+                    (ts, i * 30.0),
                 )
         day = _day(opened_at=T0, stopped_at=T0 + timedelta(minutes=10))
         epoch = int(T0.timestamp())
@@ -305,5 +365,27 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
             cur.execute("SELECT neighbour_cpu_cores FROM branch_windows ORDER BY window_start")
             # 0.2 s per 10 s = 0.02 core
             assert [r[0] for r in cur.fetchall()] == [pytest.approx(0.02)] * 2
+            # 3 s of Postgres CPU per window, a quarter of its active time: 750 ms
+            cur.execute(
+                "SELECT db, branch, active_share, cpu_ms_estimate FROM catalog_windows "
+                "ORDER BY window_start"
+            )
+            assert (
+                cur.fetchall()
+                == [
+                    ("ducklake_catalog", "duckdb", pytest.approx(0.25), pytest.approx(750)),
+                    ("iceberg_catalog", "spark", 0.0, 0.0),
+                ]
+                * 2
+            )
+        # A JVM restart of the branch in the second window drops that whole window
+        from src.alternation.exits import record_exit
+
+        record_exit(conn, T0 + timedelta(seconds=400), "spark", "spark", 3)
+        conn.commit()
+        w.rebuild_day(conn, day, rows)
+        with conn.cursor() as cur:
+            cur.execute("SELECT window_start FROM benchmark_ratios ORDER BY window_start")
+            assert [r[0] for r in cur.fetchall()] == [T0]
     finally:
         conn.close()

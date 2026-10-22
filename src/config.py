@@ -241,8 +241,29 @@ BENCHMARK_SERVICES: dict[str, tuple[str | None, str]] = {
     "dagster-daemon": (None, "shared"),
     "dagster-webserver": (None, "shared"),
 }
-# Catalogs in the shared Postgres: pg_stat_database counters, an estimate (D12, D34)
+# Catalogs in the shared Postgres: pg_stat_database counters, an estimate (D12, D34).
+# Both branches keep their catalog there (DuckLake's metadata, Lakekeeper's): its CPU is
+# estimated per window as the Postgres container's CPU times the database's share of the
+# active time of every database (catalog_windows; added on 2026-10-22, the catalogs were
+# only counted on the Spark side, through the Lakekeeper container)
 CATALOG_DATABASES = ("ducklake_catalog", "iceberg_catalog")
+CATALOG_BRANCHES = {"ducklake_catalog": "duckdb", "iceberg_catalog": "spark"}
+# The shared Postgres in BENCHMARK_SERVICES (Coolify names it by its uuid)
+SHARED_POSTGRES_SERVICE = os.getenv("SHARED_POSTGRES_SERVICE", "v8kok4w0oscgg0kc4csc88kw")
+# Compose service run by each supervisor (branch, service mode): an unexpected exit of the
+# process it supervises (a JVM ended by OutOfMemoryError, 18 and 20/10) restarts it inside
+# the same container, unseen by the collector; the supervisor records it (service_exits)
+# and the windows are flagged restarted
+SUPERVISED_SERVICES = {
+    ("duckdb", False): "quix",
+    ("spark", False): "spark",
+    ("spark", True): "spark-thrift",
+}
+# Bucket usage per prefix, once a night (bucket_samples, H5b): after the bench nights
+# (BENCH_DEADLINE 01:30) and before the maintenances (02:00 DuckLake, 02:30 Iceberg),
+# when the day's copies still wait for expiration
+BUCKET_USAGE_CRON = "50 1 * * *"
+BUCKET_USAGE_BRANCHES = {"ducklake": "duckdb", "iceberg": "spark"}
 # 5-minute windows built at night from the samples and Bronze (D34)
 BENCHMARK_WINDOW_SECONDS = 300
 # A window counts in the ratios only if the samples cover 90 % of it (collector gaps)

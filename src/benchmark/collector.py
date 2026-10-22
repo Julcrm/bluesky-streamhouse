@@ -10,8 +10,9 @@ Every COLLECTOR_INTERVAL_SECONDS it stores raw samples in the benchmark database
 - host_samples: CPU steal (time the hypervisor gave to other tenants), the host's total
   CPU time (root cgroup: minus the sampled containers, the neighbours' share), host PSI,
   available memory and swap: they only flag contaminated windows, they are no result (D32);
-- catalog_samples: pg_stat_database counters of the catalog databases in the shared
-  Postgres, an estimate of each catalog's cost (D12).
+- catalog_samples: pg_stat_database counters of every database of the shared Postgres:
+  the catalogs' share of its active time estimates each catalog's CPU (D12,
+  catalog_windows; every database since 2026-10-22, for the total).
 
 Counters are stored raw and cumulative: the 5-minute windows (deltas, Mo·s, ratios per
 message) are computed afterwards by a Dagster asset, so an analysis mistake is fixed by
@@ -200,10 +201,10 @@ def list_containers(url: str = config.COLLECTOR_DOCKER_URL) -> list[dict]:
 
 
 def catalog_rows(cur) -> list[tuple]:
+    """Counters of every database (the shared row without a name left out)."""
     cur.execute(
         "SELECT datname, xact_commit, xact_rollback, blks_read, blks_hit, active_time "
-        "FROM pg_stat_database WHERE datname = ANY(%s)",
-        (list(config.CATALOG_DATABASES),),
+        "FROM pg_stat_database WHERE datname IS NOT NULL"
     )
     return cur.fetchall()
 
