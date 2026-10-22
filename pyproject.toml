@@ -52,13 +52,18 @@ benchmark = [
     # bench-collector (D34): samples go to the benchmark database
     "psycopg2-binary>=2.9",
 ]
+# Dashboard API (phase 8): read only, benchmark database, Redpanda offsets, Dagster
 api = [
     "fastapi",
     "uvicorn",
-    "duckdb>=1.5,<1.6",
+    "psycopg2-binary>=2.9",
+    "confluent-kafka>=2.8.2,<2.12",
+    "requests>=2.32",
 ]
 dev = [
     "pytest",
+    # FastAPI's TestClient
+    "httpx",
     "ruff",
     "dagster-webserver>=1.13,<1.14",
 ]

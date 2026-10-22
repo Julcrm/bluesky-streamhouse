@@ -219,8 +219,10 @@ dependencies = [
 
 [package.dev-dependencies]
 api = [
-    { name = "duckdb" },
+    { name = "confluent-kafka" },
     { name = "fastapi" },
+    { name = "psycopg2-binary" },
+    { name = "requests" },
     { name = "uvicorn" },
 ]
 benchmark = [
@@ -243,6 +245,7 @@ dbt-spark = [
 ]
 dev = [
     { name = "dagster-webserver" },
+    { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -269,8 +272,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 api = [
-    { name = "duckdb", specifier = ">=1.5,<1.6" },
+    { name = "confluent-kafka", specifier = ">=2.8.2,<2.12" },
     { name = "fastapi" },
+    { name = "psycopg2-binary", specifier = ">=2.9" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "uvicorn" },
 ]
 benchmark = [{ name = "psycopg2-binary", specifier = ">=2.9" }]
@@ -291,6 +296,7 @@ dbt-spark = [
 ]
 dev = [
     { name = "dagster-webserver", specifier = ">=1.13,<1.14" },
+    { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
 ]

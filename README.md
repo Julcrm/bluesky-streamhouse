@@ -20,6 +20,8 @@ Bronze — Quix Streams → DuckLake                 Bronze — Spark Structured
 Silver — dbt + DuckDB                            Silver — dbt + Spark (Thrift server)
         ↓                                        ↓
 Gold   — dbt + DuckDB                            Gold   — dbt + Spark (Thrift server)
+        ↓                                        ↓
+        └──── FastAPI — live and rolling metrics of both branches ────┘
 ```
 
 Data files on Garage (S3-compatible); catalogs in Postgres (DuckLake) and Lakekeeper (Iceberg REST). Orchestrated by **Dagster**, one code location per branch: Silver/Gold every 15 minutes, nightly maintenance and tests.
@@ -39,6 +41,7 @@ Data files on Garage (S3-compatible); catalogs in Postgres (DuckLake) and Lakeke
 | Message broker | Redpanda |
 | Storage | Garage (S3-compatible) |
 | Orchestration | Dagster |
+| Serving | FastAPI |
 | Metrics | cgroups v2 collector, Postgres |
 | Packaging | uv |
 | CI/CD | GitHub Actions, Coolify |
@@ -62,9 +65,11 @@ src/
 │   ├── ducklake.py             # Retention, CHECKPOINT
 │   └── iceberg.py              # Retention, compaction, snapshot expiry, orphan files
 ├── resources/                  # DuckLake, Redpanda, S3, Spark and Thrift clients
-└── dagster/
-    ├── definitions.py          # DuckDB branch code location
-    └── spark_definitions.py    # Spark branch code location
+├── dagster/
+│   ├── definitions.py          # DuckDB branch code location
+│   └── spark_definitions.py    # Spark branch code location
+└── serving/
+    └── api.py                  # FastAPI — live and rolling metrics of both branches
 
 dbt/
 ├── duckdb/                     # dbt-duckdb project
@@ -78,6 +83,7 @@ docker/
 ├── producer/  quix/  spark/    # Streaming services
 ├── dagster/  dagster-spark/    # Dagster code servers (gRPC, port 4000), Spark Thrift server
 ├── lakekeeper/                 # Iceberg catalog setup (warehouse on Garage)
+├── api/                        # FastAPI serving (port 8000)
 ├── postgres/                   # Local databases (init.sql)
 └── collector/                  # Metrics collector
 ```
@@ -97,6 +103,7 @@ make dbt-build            # DuckDB branch Silver/Gold
 make dbt-spark-build      # Spark branch Silver/Gold
 make iceberg-maintenance  # Iceberg maintenance, once
 make dagster              # Dagster UI (DuckDB branch code location)
+make api                  # Dashboard API on localhost:8000
 ```
 
 ## Tests

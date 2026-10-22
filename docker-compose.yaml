@@ -464,6 +464,39 @@ services:
       - bench
     restart: always
 
+  # Dashboard API (phase 8): read only (benchmark database, Redpanda offsets, Dagster),
+  # never the lakehouses; answers cached 30 s (live) to 15 min (rolling days). Sampled
+  # by the collector as a service of the benchmark (layer `serving`). Domain set in Coolify
+  bluesky-api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    expose:
+      - "8000"
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - DAGSTER_GRAPHQL_URL=http://dagster-webserver:3000/graphql
+      - API_KEY=${API_KEY}
+    stop_grace_period: 10s
+    # /health answers without authentication
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - coolify
+    restart: always
+
 volumes:
   spark-checkpoint:
 
