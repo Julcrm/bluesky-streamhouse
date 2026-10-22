@@ -243,6 +243,8 @@ services:
       SPARK_DRIVER_JAVA_OPTIONS: >-
         -XX:+UseSerialGC -XX:ReservedCodeCacheSize=128m -XX:MaxDirectMemorySize=64m
         -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
+        -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp/thrift-oom.hprof
+        -Xlog:gc*:file=/tmp/thrift-gc.log:time,uptime,level,tags:filecount=5,filesize=10m
       MALLOC_ARENA_MAX: "2"
     ports:
       - "127.0.0.1:10000:10000"
