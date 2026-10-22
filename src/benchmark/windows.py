@@ -558,6 +558,22 @@ DDL = [
       AND s.covered_s >= {config.BENCHMARK_WINDOW_SECONDS} * {config.BENCHMARK_MIN_COVERAGE}
     GROUP BY b.day, b.branch, b.window_start, b.regime, b.rate_bucket, b.messages,
              b.latency_p50_ms, b.latency_p95_ms, s.layer""",
+    # Per day, branch, layer, regime and rate bucket, over the clean windows: ratios of sums
+    # (CPU of all the windows / their messages), not means of ratios, and the median of the
+    # windows' latency. Read by the dashboard over rolling days and, over the measurement
+    # period, the figures of the hypotheses (frozen with the protocol)
+    """CREATE OR REPLACE VIEW branch_daily AS
+    SELECT day, branch, layer, regime, rate_bucket,
+           count(*) AS windows,
+           sum(messages) AS messages,
+           sum(cpu_ms_per_message * messages) / nullif(sum(messages), 0) AS cpu_ms_per_message,
+           sum(ram_mib_s_per_10k_messages * messages) / nullif(sum(messages), 0)
+               AS ram_mib_s_per_10k_messages,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_p50_ms) AS latency_p50_ms,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_p95_ms) AS latency_p95_ms,
+           max(peak_anon_mib) AS peak_anon_mib
+    FROM benchmark_ratios
+    GROUP BY day, branch, layer, regime, rate_bucket""",
 ]
 
 

@@ -232,6 +232,9 @@ BENCHMARK_SERVICES: dict[str, tuple[str | None, str]] = {
     "redpanda": (None, "broker"),
     "garage": (None, "storage"),
     "bench-collector": (None, "collector"),
+    # The dashboard's API: sampled so its CPU is the benchmark's, not a neighbour's; out of
+    # the ratios like every service without a branch
+    "bluesky-api": (None, "serving"),
     # Shared with the neighbours (velib) but serving both branches alike: sampled so that
     # their CPU counts as the benchmark's, not the neighbours', in the contamination flag
     # (decision of Julien on 2026-10-15). Out of the ratios like every service without a
@@ -264,6 +267,17 @@ SUPERVISED_SERVICES = {
 # when the day's copies still wait for expiration
 BUCKET_USAGE_CRON = "50 1 * * *"
 BUCKET_USAGE_BRANCHES = {"ducklake": "duckdb", "iceberg": "spark"}
+
+# --- Serving API of the portfolio dashboard (phase 8, src/serving/api.py) ---
+# Read only: the benchmark database, Redpanda's offsets and Dagster, never the lakehouses
+API_KEY = os.getenv("API_KEY", "")
+DAGSTER_GRAPHQL_URL = os.getenv("DAGSTER_GRAPHQL_URL", "http://localhost:3000/graphql")
+# Answers cached, so the dashboard's visitors cost nothing measurable
+API_LIVE_CACHE_SECONDS = 30
+API_ROLLING_CACHE_SECONDS = 900
+# Rolling windows the dashboard may ask for (days)
+API_ROLLING_DAYS = (7, 30)
+API_LIVE_MINUTES = 15
 # 5-minute windows built at night from the samples and Bronze (D34)
 BENCHMARK_WINDOW_SECONDS = 300
 # A window counts in the ratios only if the samples cover 90 % of it (collector gaps)

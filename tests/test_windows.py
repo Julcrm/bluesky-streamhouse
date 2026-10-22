@@ -273,7 +273,7 @@ def test_offset_chunks_cover_the_day_once() -> None:
 
 
 def test_ratio_view_only_uses_clean_windows() -> None:
-    view = w.DDL[-1]
+    [view] = [s for s in w.DDL if "VIEW benchmark_ratios" in s]
     assert "NOT b.host_contaminated" in view
     # A restart of any service of the branch drops the whole window, not that service alone
     assert "r.branch = b.branch AND r.restarted" in view
@@ -300,7 +300,7 @@ def test_rebuild_day_writes_windows_and_the_ratio_view(monkeypatch) -> None:
     conn = collector.connect()
     try:
         with conn, conn.cursor() as cur:
-            cur.execute("DROP VIEW IF EXISTS benchmark_ratios")
+            cur.execute("DROP VIEW IF EXISTS branch_daily, benchmark_ratios")
             for table in (
                 "container_samples",
                 "host_samples",
