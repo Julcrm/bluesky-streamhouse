@@ -241,7 +241,7 @@ services:
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       SPARK_THRIFT_DRIVER_MEMORY: 1024m
       SPARK_DRIVER_JAVA_OPTIONS: >-
-        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -XX:+UseSerialGC -XX:ReservedCodeCacheSize=128m -XX:MaxDirectMemorySize=64m
         -XX:MaxMetaspaceSize=320m -Xss512k -XX:+ExitOnOutOfMemoryError
       MALLOC_ARENA_MAX: "2"
     ports:
