@@ -348,11 +348,11 @@ BENCH_BOUNDS_POLL_SECONDS = 10
 BENCH_NIGHT_CRON = "0 20 * * 1,2"
 BENCH_DEADLINE = "01:30"
 BENCH_REPETITIONS = 3
-# Calibration week: 1x too (it checks the replay costs the same as the live); then 4x
-# and max only. Nights up to this date (Europe/Paris) calibrate. Moved on 2026-10-15
-# (decision of Julien): the freeze slipped to ~19-20/10, calibration is its first week;
-# to set again at the freeze commit
-BENCH_CALIBRATION_UNTIL = "2026-10-27"
+# Rates of every night, each repeated BENCH_REPETITIONS times. 1x checks the replay costs
+# the same as the live; first planned for the calibration week only, kept every week
+# since 2026-10-23 (decision of Julien): the Spark night of 22/10 ended at 21:58, far
+# before the 01:30 deadline
+BENCH_RATES = ("1x", "4x", "max")
 # After the engine started on a 1x or 4x run, before the replay: the JVM of Spark takes
 # 30-60 s to consume, Quix a few seconds; the same wait for both keeps the start-up out
 # of the steady-state latency (start-up costs are counted in H6)
