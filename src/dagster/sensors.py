@@ -25,7 +25,7 @@ from src.dagster.alerts import failure_alert_sensor as _failure_alert_sensor
 from src.dagster.alerts import send_email, send_failure_email
 from src.dagster.alternation import calendar_job, completeness_job, completeness_request_b
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
-from src.dagster.storage import bucket_usage_job
+from src.dagster.storage import bucket_usage_job, table_usage_job
 
 __all__ = ["calendar_alert_sensor", "failure_alert_sensor", "send_email", "send_failure_email"]
 
@@ -40,6 +40,7 @@ failure_alert_sensor = _failure_alert_sensor(
         calendar_job,
         completeness_job,
         bucket_usage_job,
+        table_usage_job,
     ],
 )
 

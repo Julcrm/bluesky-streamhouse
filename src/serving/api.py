@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from functools import wraps
 from typing import Any
 
@@ -31,6 +32,7 @@ from fastapi.security import APIKeyHeader
 
 from src import config
 from src.alternation import calendar as cal
+from src.benchmark import tipping
 
 app = FastAPI(title="Bluesky Streamhouse API", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
@@ -82,9 +84,19 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
             except psycopg2.errors.UndefinedTable:
                 return []
             columns = [c.name for c in cur.description]
-            return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+            return [
+                {c: _number(v) for c, v in zip(columns, row, strict=True)} for row in cur.fetchall()
+            ]
     finally:
         conn.close()
+
+
+def _number(value: Any) -> Any:
+    """Postgres sums and averages come back as Decimal, which FastAPI serializes as a
+    string ("39500000"): numbers for the dashboard."""
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    return value
 
 
 def dagster(graphql: str) -> dict:
@@ -251,6 +263,24 @@ WHERE ts >= now() - make_interval(days => %s)
 ORDER BY ts, prefix
 """
 
+# Latest sample of each table (H5): live rows, bytes, files
+TABLES_SQL = """
+SELECT DISTINCT ON (branch, namespace, table_name)
+       ts, branch, namespace, table_name, rows, bytes, files, inlined_rows,
+       bytes::float / nullif(rows - inlined_rows, 0) AS bytes_per_row
+FROM table_samples
+WHERE ts >= now() - make_interval(days => %s)
+ORDER BY branch, namespace, table_name, ts DESC
+"""
+
+# Silver/Gold passes (H8a), the nightly checks apart
+PASSES_SQL = """
+SELECT run_id, branch, job, status, nightly, started_at, ended_at, seconds
+FROM transform_passes
+WHERE started_at >= now() - make_interval(days => %s)
+ORDER BY started_at
+"""
+
 CALENDAR_SQL = """
 SELECT day, coalesce(forced_branch, branch) AS branch, status, opened_at, caught_up_at,
        closed_at, stopped_at, late_at
@@ -388,22 +418,40 @@ def branches_daily(days: int = Query(7)) -> dict:
 
 
 @cached(config.API_ROLLING_CACHE_SECONDS)
-def _bench(days: int) -> list[dict]:
-    return query(BENCH_SQL, (days,))
+def _bench(days: int) -> dict:
+    runs = query(BENCH_SQL, (days,))
+    return {"days": days, "runs": runs, "tipping_point": tipping.tipping_point(runs)}
 
 
 @app.get("/bench/nights", dependencies=[Depends(verify_api_key)])
 def bench_nights(days: int = Query(30)) -> dict:
-    """Controlled-test nights: each run's throughput, latency, CPU and memory."""
-    return {"days": days, "runs": _bench(_days(days))}
+    """Controlled-test nights: each run's throughput, latency, CPU and memory, and the
+    fixed + marginal cost model fitted on them with its crossing (figures, no verdict)."""
+    return _bench(_days(days))
 
 
 @cached(config.API_ROLLING_CACHE_SECONDS)
-def _storage(days: int) -> list[dict]:
-    return query(STORAGE_SQL, (days,))
+def _storage(days: int) -> dict:
+    return {
+        "days": days,
+        "samples": query(STORAGE_SQL, (days,)),
+        "tables": query(TABLES_SQL, (days,)),
+    }
 
 
 @app.get("/storage", dependencies=[Depends(verify_api_key)])
 def storage(days: int = Query(30)) -> dict:
-    """Bucket usage per prefix and branch, each night before the maintenances."""
-    return {"days": days, "samples": _storage(_days(days))}
+    """Bucket usage per prefix and branch each night before the maintenances, and the
+    latest live rows, bytes and files of each table after them."""
+    return _storage(_days(days))
+
+
+@cached(config.API_ROLLING_CACHE_SECONDS)
+def _passes(days: int) -> list[dict]:
+    return query(PASSES_SQL, (days,))
+
+
+@app.get("/branches/passes", dependencies=[Depends(verify_api_key)])
+def branches_passes(days: int = Query(7)) -> dict:
+    """Every Silver/Gold pass of both branches: when, how long, how it ended."""
+    return {"days": days, "passes": _passes(_days(days))}

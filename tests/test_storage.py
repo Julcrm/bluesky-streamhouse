@@ -80,3 +80,60 @@ def test_record_one_row_per_prefix_with_its_branch() -> None:
         ("ts", "ducklake/bronze", "duckdb", 150, 2),
         ("ts", "iceberg", "spark", 1003, 2),
     ]
+
+
+def test_iceberg_usage_from_the_current_snapshot_summary() -> None:
+    metadata = {
+        "current-snapshot-id": 2,
+        "snapshots": [
+            {"snapshot-id": 1, "summary": {"total-records": "10"}},
+            {
+                "snapshot-id": 2,
+                "summary": {
+                    "total-records": "1000",
+                    "total-position-deletes": "40",
+                    "total-files-size": "126000",
+                    "total-data-files": "3",
+                    "total-delete-files": "1",
+                },
+            },
+        ],
+    }
+    usage = storage.iceberg_usage("bronze", "bronze_events", metadata)
+    assert (usage.branch, usage.rows, usage.bytes, usage.files) == ("spark", 960, 126000, 4)
+
+
+def test_iceberg_table_without_snapshot_is_empty() -> None:
+    usage = storage.iceberg_usage("gold", "gold_langs_hour", {"current-snapshot-id": None})
+    assert (usage.rows, usage.bytes, usage.files) == (0, 0, 0)
+
+
+def test_ducklake_tables_of_the_local_catalogs() -> None:
+    """Rows of the local catalogs: files and inlined rows, live tables only."""
+    from tests.test_resources_ducklake import _local_stack_up
+
+    if not _local_stack_up():
+        import pytest
+
+        pytest.skip("local stack not running (make up)")
+    import psycopg2
+
+    from src import config
+
+    conn = psycopg2.connect(
+        host=config.POSTGRES_HOST,
+        port=config.POSTGRES_PORT,
+        dbname=config.DUCKLAKE_CATALOG_DB,
+        user=config.POSTGRES_USER,
+        password=config.POSTGRES_PASSWORD,
+    )
+    try:
+        with conn.cursor() as cur:
+            bronze = storage.ducklake_tables(cur, config.DUCKLAKE_BRONZE_METADATA_SCHEMA)
+            transform = storage.ducklake_tables(cur, config.DUCKLAKE_TRANSFORM_METADATA_SCHEMA)
+    finally:
+        conn.close()
+    assert [t.table_name for t in bronze] == ["bronze_events"]
+    assert bronze[0].rows > 0 and bronze[0].rows >= bronze[0].inlined_rows
+    assert {"silver_posts", "gold_langs_hour"} <= {t.table_name for t in transform}
+    assert all(t.branch == "duckdb" for t in bronze + transform)
