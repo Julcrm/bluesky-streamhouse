@@ -72,12 +72,12 @@ class Tools:
     measure: Callable[[runs.BenchStore, runs.BenchRunRow, list], dict] = _measure
 
 
-def night_plan(night: date) -> list[tuple[str, int]]:
-    """(rate, repetition) of a night: 1x, 4x and max during calibration, then 4x and
-    max; each rate repeated BENCH_REPETITIONS times."""
-    calibration = night <= date.fromisoformat(config.BENCH_CALIBRATION_UNTIL)
-    rates = ("1x", "4x", "max") if calibration else ("4x", "max")
-    return [(rate, r) for rate in rates for r in range(1, config.BENCH_REPETITIONS + 1)]
+def night_plan() -> list[tuple[str, int]]:
+    """(rate, repetition) of a night: every rate of BENCH_RATES, each repeated
+    BENCH_REPETITIONS times."""
+    return [
+        (rate, r) for rate in config.BENCH_RATES for r in range(1, config.BENCH_REPETITIONS + 1)
+    ]
 
 
 def night_deadline(night: date) -> datetime:
@@ -174,7 +174,7 @@ def run_night(tools: Tools, branch: BenchBranch, night: date) -> dict:
     tools.store.ensure_table()
     deadline = night_deadline(night)
     summary = {"done": [], "failed": [], "skipped": []}
-    for rate, repetition in night_plan(night):
+    for rate, repetition in night_plan():
         label = f"{rate}#{repetition}"
         needed = timedelta(seconds=estimated_seconds(rate, branch.branch))
         if tools.now() + needed > deadline:
