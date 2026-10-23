@@ -130,6 +130,8 @@ services:
       - DUCKDB_MEMORY_LIMIT=1.5GB
       # Kafka high watermarks: the 19:00 bounds of the alternation (D28)
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      # Iceberg tables' metadata for the nightly table usage (H5), through Lakekeeper's REST
+      - ICEBERG_CATALOG_URI=http://lakekeeper:8181/catalog
       # Failure alerts by email (Resend, as velib); none are sent while unset
       - RESEND_API_KEY=${RESEND_API_KEY}
       - ALERT_EMAIL=${ALERT_EMAIL}

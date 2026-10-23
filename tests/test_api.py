@@ -130,8 +130,9 @@ def test_answers_are_cached(client, monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(api, "query", lambda sql, params=(): calls.append(sql) or [])
     client.get("/storage?days=30", headers=KEY)
+    first = len(calls)  # bucket samples and tables
     client.get("/storage?days=30", headers=KEY)
-    assert len(calls) == 1
+    assert first == 2 and len(calls) == first
 
 
 def test_frozen_sql_runs_on_the_benchmark_schema(monkeypatch) -> None:
@@ -141,7 +142,7 @@ def test_frozen_sql_runs_on_the_benchmark_schema(monkeypatch) -> None:
 
     if not _local_stack_up():
         pytest.skip("local stack not running (make up)")
-    from src.benchmark import collector, runs, storage, windows
+    from src.benchmark import collector, passes, runs, storage, windows
 
     test_db = "bluesky_benchmark_api_test"
     admin = cal.connect_benchmark("postgres")
@@ -157,6 +158,8 @@ def test_frozen_sql_runs_on_the_benchmark_schema(monkeypatch) -> None:
             for statement in collector.DDL + windows.DDL:
                 cur.execute(statement)
             cur.execute(storage.DDL)
+            cur.execute(storage.TABLE_DDL)
+            cur.execute(passes.DDL)
         cal.CalendarStore(conn).ensure_table()
         runs.BenchStore(conn).ensure_table()
     finally:
@@ -169,6 +172,8 @@ def test_frozen_sql_runs_on_the_benchmark_schema(monkeypatch) -> None:
         api.BENCH_SQL,
         api.STORAGE_SQL,
         api.RESOURCES_SQL,
+        api.TABLES_SQL,
+        api.PASSES_SQL,
     ):
         assert api.query(sql, (7,)) == []
     assert api.query(api.CALENDAR_SQL) == []
@@ -190,3 +195,13 @@ def test_a_table_not_created_yet_gives_no_rows(monkeypatch) -> None:
     monkeypatch.setattr(config, "BENCHMARK_DB", test_db)
     assert api.query(api.STORAGE_SQL, (30,)) == []
     assert api.query(api.COMPARE_SQL, (7,)) == []
+
+
+def test_postgres_decimals_are_numbers() -> None:
+    """Sums came back as strings in prod ("messages": "39500000", 22/10)."""
+    from decimal import Decimal
+
+    assert api._number(Decimal("39500000")) == 39_500_000
+    assert isinstance(api._number(Decimal("39500000")), int)
+    assert api._number(Decimal("0.25")) == 0.25
+    assert api._number("spark") == "spark"

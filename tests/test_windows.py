@@ -104,8 +104,12 @@ def test_host_steal_share_and_contamination(monkeypatch) -> None:
     assert not w.host_contaminated(clean)
     stolen = w.host_windows([h(0, 0, 0), h(300, 1000, 80)])[T0]
     assert w.host_contaminated(stolen)  # 8 % > 5 %
+    # Little memory left is no flag (22/10): on this host it is the heavier branch's own
+    # use (Spark days down to 659 MiB, DuckDB days never below 2 153), flagging it would
+    # drop that branch's heaviest windows
     tight = w.host_windows([h(0, 0, 0), h(300, 1000, 0, avail_mib=300)])[T0]
-    assert w.host_contaminated(tight)
+    assert tight.min_available_mib == pytest.approx(300)
+    assert not w.host_contaminated(tight)
     assert w.host_contaminated(None)
 
 

@@ -39,6 +39,7 @@ from src.dagster.alerts import failure_alert_sensor
 from src.dagster.bench import bench_night_definitions, spark_arrivals, spark_transform
 from src.dagster.housekeeping import housekeeping_asset
 from src.dagster.one_off import OneOffRun, one_off_sensor
+from src.dagster.passes import pass_sensors
 from src.dagster.runs import active_location_runs, wait_for_runs
 from src.dagster.spark_alternation import (
     iceberg_completeness_job,
@@ -411,6 +412,7 @@ defs = Definitions(
             timedelta(hours=config.ONE_OFF_GRACE_HOURS),
             config.ONE_OFF_SENSOR_SECONDS,
         ),
+        *pass_sensors("spark", "spark", [spark_silver_gold_job, spark_nightly_checks_job]),
     ],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )

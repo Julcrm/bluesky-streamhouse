@@ -36,10 +36,18 @@ from src.dagster.bench import bench_night_definitions, duckdb_arrivals, duckdb_t
 from src.dagster.jobs import maintenance_job, nightly_checks_job, silver_gold_job
 from src.dagster.maintenance import maintenance_assets
 from src.dagster.one_off import OneOffRun, one_off_sensor
+from src.dagster.passes import pass_sensors
 from src.dagster.runs import active_location_runs, blocks_schedule
 from src.dagster.sample import benchmark_sample, sample_job, sample_schedule
 from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
-from src.dagster.storage import bucket_usage, bucket_usage_job, bucket_usage_schedule
+from src.dagster.storage import (
+    bucket_usage,
+    bucket_usage_job,
+    bucket_usage_schedule,
+    table_usage,
+    table_usage_job,
+    table_usage_schedule,
+)
 
 __all__ = [
     "blocks_schedule",
@@ -164,6 +172,7 @@ defs = Definitions(
         duckdb_benchmark_windows,
         benchmark_sample,
         bucket_usage,
+        table_usage,
     ],
     jobs=[
         silver_gold_job,
@@ -174,6 +183,7 @@ defs = Definitions(
         sample_job,
         duckdb_bench_job,
         bucket_usage_job,
+        table_usage_job,
     ],
     schedules=[
         silver_gold_schedule,
@@ -184,6 +194,7 @@ defs = Definitions(
         sample_schedule,
         duckdb_bench_schedule,
         bucket_usage_schedule,
+        table_usage_schedule,
     ],
     sensors=[
         failure_alert_sensor,
@@ -195,6 +206,7 @@ defs = Definitions(
             timedelta(hours=config.ONE_OFF_GRACE_HOURS),
             config.ONE_OFF_SENSOR_SECONDS,
         ),
+        *pass_sensors("duckdb", "duckdb", [silver_gold_job, nightly_checks_job]),
     ],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},
 )
