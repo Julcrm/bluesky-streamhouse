@@ -185,3 +185,30 @@ def test_committed_position_from_the_progress_json() -> None:
     progress = json.dumps({"sources": [{"endOffset": {"raw_events": {"0": 5, "1": 7}}}]})
     assert committed_position(progress) == {0: 5, 1: 7}
     assert committed_position(json.dumps({"sources": []})) is None
+
+
+def test_only_the_first_batch_looks_up_the_last_commit() -> None:
+    """A replay can only be the first batch after a start: later batches never read
+    the snapshots metadata table (it grows all day, 22/10)."""
+    from src.processing.spark.stream_job import BronzeBatchWriter
+
+    writer = BronzeBatchWriter("/unused", None)
+    lookups = []
+
+    def last_key(_spark):
+        lookups.append(1)
+        return "q:7"
+
+    writer.last_key = last_key
+    assert writer.is_replay(None, "q:7") is True
+    assert writer.is_replay(None, "q:8") is False
+    assert writer.is_replay(None, "q:9") is False
+    assert len(lookups) == 1 and writer.last_key_check_ms == 0.0
+
+
+def test_a_first_batch_that_is_not_a_replay_is_written() -> None:
+    from src.processing.spark.stream_job import BronzeBatchWriter
+
+    writer = BronzeBatchWriter("/unused", None)
+    writer.last_key = lambda _spark: "q:6"
+    assert writer.is_replay(None, "q:7") is False
