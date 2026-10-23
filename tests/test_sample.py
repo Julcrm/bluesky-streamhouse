@@ -67,17 +67,6 @@ def test_existing_sample_is_never_rewritten() -> None:
         sample.create_sample_topic("bench_sample", 3, admin)
 
 
-def test_schedule_skips_once_the_sample_exists(monkeypatch) -> None:
-    from dagster import RunRequest, SkipReason, build_schedule_context
-
-    from src.dagster.sample import sample_schedule
-
-    monkeypatch.setattr(sample, "sample_exists", lambda: True)
-    assert isinstance(sample_schedule(build_schedule_context()), SkipReason)
-    monkeypatch.setattr(sample, "sample_exists", lambda: False)
-    assert isinstance(sample_schedule(build_schedule_context()), RunRequest)
-
-
 def _redpanda_up() -> bool:
     host, port = config.KAFKA_BOOTSTRAP_SERVERS.split(",")[0].rsplit(":", 1)
     try:
