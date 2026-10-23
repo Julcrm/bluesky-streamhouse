@@ -1,23 +1,15 @@
 """
-Frozen sample of the controlled test (decision D35): one run at the configured date,
-copying an evening slice of `raw_events` into a topic kept forever. Served by the DuckDB
+Frozen sample of the controlled test (decision D35): an evening slice of `raw_events`
+copied into a topic kept forever, by one scheduled run on 2026-10-09 (the schedule was
+removed on 2026-10-23, once served). The job stays: it shows how the sample was made and
+refuses to run again while the topic exists. Served by the DuckDB
 branch's code server, which already reaches Redpanda (alternation bounds); the sample
 belongs to neither branch.
 """
 
 from datetime import datetime
 
-from dagster import (
-    AssetExecutionContext,
-    DefaultScheduleStatus,
-    MaterializeResult,
-    RunRequest,
-    ScheduleEvaluationContext,
-    SkipReason,
-    asset,
-    define_asset_job,
-    schedule,
-)
+from dagster import AssetExecutionContext, MaterializeResult, asset, define_asset_job
 
 from src import config
 from src.benchmark import sample
@@ -46,19 +38,3 @@ sample_job = define_asset_job(
     selection=[benchmark_sample],
     description="Frozen sample of the controlled test, copied once (D35).",
 )
-
-
-@schedule(
-    job=sample_job,
-    cron_schedule=config.BENCH_SAMPLE_CRON,
-    execution_timezone=config.DAGSTER_TIMEZONE,
-    default_status=DefaultScheduleStatus.RUNNING,
-)
-def sample_schedule(context: ScheduleEvaluationContext) -> RunRequest | SkipReason:
-    """Once, at the configured date; never again once the sample exists."""
-    try:
-        if sample.sample_exists():
-            return SkipReason(f"Sample {config.BENCH_SAMPLE_TOPIC} already frozen")
-    except Exception as e:  # noqa: BLE001 - Redpanda unreachable: the run would fail too
-        return SkipReason(f"Redpanda unreachable: {e}")
-    return RunRequest()

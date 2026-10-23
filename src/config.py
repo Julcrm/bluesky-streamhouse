@@ -307,21 +307,13 @@ BENCH_SAMPLE_TOPIC = "bench_raw_events_sample"
 # Copied after the fact while raw_events still holds it (24 h retention)
 BENCH_SAMPLE_START = "2026-10-09T19:30:00+02:00"
 BENCH_SAMPLE_MINUTES = 20
-# One run only, at this date (Europe/Paris): 21:00, after the DuckDB day's close and its
-# last Silver/Gold runs, when nothing is measured; skipped once the sample topic exists
-BENCH_SAMPLE_CRON = "0 21 9 10 *"
 # --- One-off runs (src/dagster/one_off.py, decision of Julien on 2026-10-11) ---
 # A test or a catch-up launched once at a set time (Europe/Paris offset), so nothing
 # waits for someone to be available. Key = run key (launched once); remove an entry once
 # it has served. Launched only within the grace period after its time, never later
 ONE_OFF_GRACE_HOURS = 12
 ONE_OFF_SENSOR_SECONDS = 60
-ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = (
-    # Spark controlled-test night on the Spark day of 22/10, ahead of the scheduled
-    # Monday 26/10: those of 18 and 20/10 ran no run (bluesky-spark could not reach
-    # Redpanda, then waited 2 h for the completeness check), both fixed on 22/10
-    ("bench-spark-night-2026-10-22", "bluesky_spark_bench_night", "2026-10-22T20:00:00+02:00", {}),
-)
+ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = ()
 ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = ()
 
 # --- Controlled test: "bench" mode of the engines (decision D36) ---
