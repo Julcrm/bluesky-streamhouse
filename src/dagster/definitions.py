@@ -38,7 +38,7 @@ from src.dagster.maintenance import maintenance_assets
 from src.dagster.one_off import OneOffRun, one_off_sensor
 from src.dagster.passes import pass_sensors
 from src.dagster.runs import active_location_runs, blocks_schedule
-from src.dagster.sample import benchmark_sample, sample_job, sample_schedule
+from src.dagster.sample import benchmark_sample, sample_job
 from src.dagster.sensors import calendar_alert_sensor, failure_alert_sensor
 from src.dagster.storage import (
     bucket_usage,
@@ -191,7 +191,6 @@ defs = Definitions(
         nightly_checks_schedule,
         open_day_schedule,
         close_day_schedule,
-        sample_schedule,
         duckdb_bench_schedule,
         bucket_usage_schedule,
         table_usage_schedule,
