@@ -215,6 +215,12 @@ class BronzeBatchWriter:
         self.day = day
         self.identifier = identifier
         self._query_id: str | None = None
+        # Only the first batch after a start can be a replay (a crash between the Iceberg
+        # commit and the checkpoint's commit file): checked once per process. Checked on
+        # every batch until 2026-10-23, it read the snapshots metadata table, one row more
+        # every 5 s until the night's expiration: a task growing ~0.6 KiB per snapshot
+        # (10 MB late on 22/10) and ~300 ms per batch at 3,000 snapshots (local)
+        self._replay_checked = False
         # Cost of the idempotence check of the last batch (benchmark: Spark branch complexity)
         self.last_key_check_ms = 0.0
 
@@ -236,16 +242,24 @@ class BronzeBatchWriter:
         ).first()
         return row["batch_key"] if row else None
 
+    def is_replay(self, spark: SparkSession, key: str) -> bool:
+        """Whether this batch is already in Bronze; looked up on the first batch only."""
+        if self._replay_checked:
+            self.last_key_check_ms = 0.0
+            return False
+        started = time.perf_counter()
+        committed = self.last_key(spark)
+        self.last_key_check_ms = (time.perf_counter() - started) * 1000
+        self._replay_checked = True
+        return committed == key
+
     def __call__(self, batch: DataFrame, batch_id: int) -> None:
         spark = batch.sparkSession
         end = self.day.bounds() if self.day is not None else None
         if end is not None:
             batch = batch.where(before_end(end))
         key = f"{self.query_id()}:{batch_id}"
-        started = time.perf_counter()
-        committed = self.last_key(spark)
-        self.last_key_check_ms = (time.perf_counter() - started) * 1000
-        if committed == key:
+        if self.is_replay(spark, key):
             logger.info(f"Batch {batch_id} already in Bronze (replay after a restart), skipped")
             return
         rows = parse_raw_events(batch)
