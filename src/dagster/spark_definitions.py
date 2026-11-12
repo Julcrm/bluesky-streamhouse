@@ -12,7 +12,7 @@ One run at a time in this location (D30): the Thrift server is shared.
 """
 
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from dagster import (
@@ -38,7 +38,6 @@ from src.benchmark.cleanup import drop_iceberg_bench
 from src.dagster.alerts import failure_alert_sensor
 from src.dagster.bench import bench_night_definitions, spark_arrivals, spark_transform
 from src.dagster.housekeeping import housekeeping_asset
-from src.dagster.one_off import OneOffRun, one_off_sensor
 from src.dagster.passes import pass_sensors
 from src.dagster.runs import active_location_runs, wait_for_runs
 from src.dagster.spark_alternation import (
@@ -400,18 +399,6 @@ defs = Definitions(
             ],
         ),
         iceberg_completeness_sensor,
-        one_off_sensor(
-            "spark_one_off_sensor",
-            [
-                iceberg_completeness_job,
-                iceberg_maintenance_job,
-                spark_nightly_checks_job,
-                spark_bench_job,
-            ],
-            [OneOffRun(*run) for run in config.ONE_OFF_RUNS_SPARK],
-            timedelta(hours=config.ONE_OFF_GRACE_HOURS),
-            config.ONE_OFF_SENSOR_SECONDS,
-        ),
         *pass_sensors("spark", "spark", [spark_silver_gold_job, spark_nightly_checks_job]),
     ],
     resources={"dbt": DbtCliResource(project_dir=dbt_project)},

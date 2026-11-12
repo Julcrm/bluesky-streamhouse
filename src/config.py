@@ -307,15 +307,6 @@ BENCH_SAMPLE_TOPIC = "bench_raw_events_sample"
 # Copied after the fact while raw_events still holds it (24 h retention)
 BENCH_SAMPLE_START = "2026-10-09T19:30:00+02:00"
 BENCH_SAMPLE_MINUTES = 20
-# --- One-off runs (src/dagster/one_off.py, decision of Julien on 2026-10-11) ---
-# A test or a catch-up launched once at a set time (Europe/Paris offset), so nothing
-# waits for someone to be available. Key = run key (launched once); remove an entry once
-# it has served. Launched only within the grace period after its time, never later
-ONE_OFF_GRACE_HOURS = 12
-ONE_OFF_SENSOR_SECONDS = 60
-ONE_OFF_RUNS_SPARK: tuple[tuple[str, str, str, dict], ...] = ()
-ONE_OFF_RUNS_DUCKDB: tuple[tuple[str, str, str, dict], ...] = ()
-
 # --- Controlled test: "bench" mode of the engines (decision D36) ---
 # The supervisor starts its engine with BENCH_RUN=<run id> for a requested run of
 # bench_runs, never while a day of its branch is active. The engine then reads the
