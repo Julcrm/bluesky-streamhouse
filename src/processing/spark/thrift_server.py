@@ -48,6 +48,9 @@ def server_conf() -> dict[str, str]:
         # insert_overwrite replaces only the partitions present in the output (Gold hours)
         "spark.sql.sources.partitionOverwriteMode": "dynamic",
         "spark.ui.enabled": "false",
+        # Arrow buffers of the vectorized reader are off-heap: a Bronze batch of large
+        # `record` strings asked for 64 MiB at once and hit MaxDirectMemorySize (19/11)
+        "spark.sql.iceberg.vectorization.enabled": "false",
     }
 
 
