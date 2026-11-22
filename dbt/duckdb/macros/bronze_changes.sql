@@ -59,8 +59,9 @@
 {% endmacro %}
 
 -- Bronze snapshot range to read: (last snapshot already read or none, snapshot to read up to).
--- A run reads at most var('silver_max_rows_per_run') Bronze rows, whole snapshots only
--- and at least one: dbt stages the batch in a temp table, so an unbounded batch (the
+-- A run reads at most var('silver_max_rows_per_run') Bronze rows and
+-- var('silver_max_record_bytes_per_run') bytes of `record`, whole snapshots only and at
+-- least one: dbt stages the batch in a temp table, so an unbounded batch (the
 -- 07:00 catch-up, D10, or a first run on days of Bronze) would overflow the container.
 -- A first run counts from the oldest snapshot still kept. Rows written before it (once
 -- the maintenance has expired snapshots) are not counted and all come in that first
@@ -96,6 +97,20 @@
         ~ ") SELECT coalesce("
         ~ " max(snapshot_id) FILTER (WHERE total <= " ~ var('silver_max_rows_per_run') ~ "),"
         ~ " min(snapshot_id), " ~ current ~ ") FROM running"
+    ).columns[0].values()[0] -%}
+    {#- Bytes counted on the row-capped range only: summing `record` over the whole backlog
+        would read all of it (19 M rows at the 07:00 catch-up) -#}
+    {%- set read_up_to = run_query(
+        "WITH per_snapshot AS ("
+        ~ " SELECT snapshot_id, sum(length(record)) AS b"
+        ~ " FROM ducklake_table_insertions('" ~ bronze.database ~ "', '" ~ bronze.schema ~ "', '"
+        ~ bronze.identifier ~ "', " ~ read_from ~ ", " ~ read_up_to ~ ")"
+        ~ " GROUP BY 1"
+        ~ "), running AS ("
+        ~ " SELECT snapshot_id, sum(b) OVER (ORDER BY snapshot_id) AS total FROM per_snapshot"
+        ~ ") SELECT coalesce("
+        ~ " max(snapshot_id) FILTER (WHERE total <= " ~ var('silver_max_record_bytes_per_run') ~ "),"
+        ~ " min(snapshot_id), " ~ read_up_to ~ ") FROM running"
     ).columns[0].values()[0] -%}
     {{ return((last_read, read_up_to)) }}
 {% endmacro %}
