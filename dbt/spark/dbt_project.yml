@@ -22,7 +22,7 @@ on-run-end:
 
 vars:
   # Same caps as the DuckDB branch (dbt/duckdb/dbt_project.yml), same reasons
-  silver_max_rows_per_run: 500000
+  silver_max_rows_per_run: 150000
   gold_max_hours_per_run: 6
   gold_top_hashtags: 50
   # Test windows (decision D25), Spark interval literals
