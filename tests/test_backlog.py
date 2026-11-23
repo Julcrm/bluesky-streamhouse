@@ -44,8 +44,8 @@ def test_caps_come_from_dbt_project() -> None:
     """The caps are dbt vars, not a second copy in Python."""
     assert silver_max_rows_per_run() == 150_000
     assert gold_max_hours_per_run() == 6
-    # Same caps in the Spark branch's project (contract)
-    assert silver_max_rows_per_run(config.DBT_SPARK_PROJECT_DIR) == 150_000
+    # Spark keeps 500k Silver rows: the 150k cap only guards DuckDB's memory
+    assert silver_max_rows_per_run(config.DBT_SPARK_PROJECT_DIR) == 500_000
     assert gold_max_hours_per_run(config.DBT_SPARK_PROJECT_DIR) == 6
 
 
