@@ -21,8 +21,10 @@ on-run-end:
   - "{{ log_backlog() }}"
 
 vars:
-  # Same caps as the DuckDB branch (dbt/duckdb/dbt_project.yml), same reasons
-  silver_max_rows_per_run: 150000
+  # Gold cap as in the DuckDB branch. Silver stays at 500k: DuckDB's 150k (2026-11-22)
+  # guards its temp table in memory, while a Spark catch-up pass costs ~2-4 min whatever
+  # its size, so 150k made the 23/11 catch-up ~3x slower
+  silver_max_rows_per_run: 500000
   gold_max_hours_per_run: 6
   gold_top_hashtags: 50
   # Test windows (decision D25), Spark interval literals
